@@ -36,4 +36,9 @@ class Ride extends Model
 {
     return $this->belongsTo(VehicleCategory::class, 'vehicle_category_id');
 }
+
+    public function chatRoom()
+    {
+        return $this->hasOne(ChatRoom::class);
+    }
 }

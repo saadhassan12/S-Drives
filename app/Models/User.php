@@ -3,6 +3,8 @@
 namespace App\Models;
 
 // use Illuminate\Contracts\Auth\MustVerifyEmail;
+use App\Models\ChatMessage;
+use App\Models\ChatRoom;
 use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Database\Eloquent\SoftDeletes;
@@ -34,7 +36,9 @@ class User extends Authenticatable
         'profile_picture',
         'role',
         'last_login_at',
-        'device_token'
+        'device_token',
+        'is_online',
+        'last_seen_at',
     ];
 
     /**
@@ -57,6 +61,8 @@ class User extends Authenticatable
         return [
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
+            'is_online' => 'boolean',
+            'last_seen_at' => 'datetime',
         ];
     }
 
@@ -79,6 +85,21 @@ class User extends Authenticatable
     public function favaddress()
     {
         return $this->hasOne(FavAddress::class);
+    }
+
+    public function passengerChatRooms()
+    {
+        return $this->hasMany(ChatRoom::class, 'passenger_id');
+    }
+
+    public function driverChatRooms()
+    {
+        return $this->hasMany(ChatRoom::class, 'driver_id');
+    }
+
+    public function chatMessages()
+    {
+        return $this->hasMany(ChatMessage::class, 'sender_id');
     }
    
 }

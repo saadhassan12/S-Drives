@@ -11,6 +11,10 @@ return new class extends Migration
      */
     public function up(): void
     {
+        if (Schema::hasTable('bids')) {
+            return;
+        }
+
         Schema::create('bids', function (Blueprint $table) {
             $table->id();
             $table->unsignedBigInteger('ride_id'); // Foreign key for the ride
@@ -29,6 +33,6 @@ return new class extends Migration
      */
     public function down(): void
     {
-        Schema::dropIfExists('bid');
+        Schema::dropIfExists('bids');
     }
 };

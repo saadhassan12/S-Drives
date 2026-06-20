@@ -3,8 +3,10 @@
 namespace App\Http\Controllers;
 
 use App\Models\Bid;
+use App\Models\ChatRoom;
 use App\Models\Ride;
 use App\Models\User;
+use App\Services\SocketNotifier;
 use Illuminate\Http\Request;
 
 class BidController extends Controller
@@ -46,6 +48,16 @@ class BidController extends Controller
             );
         }
 
+        // 🚀 REAL-TIME: Notify passenger via socket about bid update
+        notify_bid_update($passenger->id, [
+            'bid_id' => $existingBid->id,
+            'ride_id' => $rideId,
+            'driver_id' => auth()->id(),
+            'amount' => $request->amount,
+            'time' => $request->time,
+            'status' => 'updated',
+        ]);
+
         return apiResponse($existingBid, 'Bid updated successfully!');
     }
 
@@ -69,6 +81,16 @@ class BidController extends Controller
             $passenger->device_token,
         );
     }
+
+    // 🚀 REAL-TIME: Notify passenger via socket about new bid
+    notify_bid_update($passenger->id, [
+        'bid_id' => $bid->id,
+        'ride_id' => $rideId,
+        'driver_id' => auth()->id(),
+        'amount' => $request->amount,
+        'time' => $request->time,
+        'status' => 'new',
+    ]);
 
     return apiResponse($bid, 'Bid placed successfully!');
 }
@@ -98,6 +120,17 @@ public function acceptBid(Request $request, $rideId, $bid_id)
     $ride->status = 'accepted';
     $ride->save();
 
+    $chatRoom = ChatRoom::updateOrCreate(
+        ['ride_id' => $ride->id],
+        [
+            'passenger_id' => $ride->user_id,
+            'driver_id' => $bid->driver_id,
+            'status' => 'active',
+            'started_at' => now(),
+            'ended_at' => null,
+        ]
+    );
+
     // Delete other bids
     Bid::where('ride_id', $rideId)
         ->where('id', '!=', $bid_id)
@@ -118,7 +151,45 @@ public function acceptBid(Request $request, $rideId, $bid_id)
         }
     }
 
-    return apiResponse($bid, 'Bid accepted and other bids removed successfully!', 200);
+    // 🚀 REAL-TIME: Notify driver via socket
+    if ($driver) {
+        notify_bid_update($driver->id, [
+            'bid_id' => $bid->id,
+            'ride_id' => $ride->id,
+            'status' => 'accepted',
+            'final_fare' => $bid->amount,
+            'passenger_id' => $ride->user_id,
+            'chat_room_id' => $chatRoom->id,
+        ]);
+    }
+
+    // 🚀 REAL-TIME: Notify passenger via socket
+    notify_passenger_ride_update($ride->user_id, [
+        'ride_id' => $ride->id,
+        'driver_id' => $driver->id,
+        'driver_name' => $driver->name ?? 'Driver',
+        'final_fare' => $bid->amount,
+        'chat_room_id' => $chatRoom->id,
+    ], 'accepted');
+
+    // 🔄 REFRESH: Auto-refresh all drivers' nearby rides list (ride accepted, remove from pending)
+    refresh_all_drivers_list('bid_accepted', [
+        'ride_id' => $ride->id,
+        'driver_id' => $driver->id,
+        'status' => 'accepted',
+    ]);
+
+    SocketNotifier::chatStarted([
+        'chat_room_id' => $chatRoom->id,
+        'ride_id' => $ride->id,
+        'passenger_id' => $ride->user_id,
+        'driver_id' => $bid->driver_id,
+    ]);
+
+    return apiResponse([
+        'bid' => $bid,
+        'chat_room' => $chatRoom,
+    ], 'Bid accepted, chat started, and other bids removed successfully!', 200);
 }
 
 public function rejectBid(Request $request, $rideId, $bid_id)
@@ -156,4 +227,4 @@ public function rejectBid(Request $request, $rideId, $bid_id)
             $bids = Bid::where('ride_id', $rideId)->where('status', 'pending')->get();
             return apiResponse($bids, 'All bids for the ride retrieved successfully.');
          }
-}
+}  

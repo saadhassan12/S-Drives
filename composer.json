@@ -33,7 +33,8 @@
         },
         "files": [
             "app/Helpers/ResponseHelper.php",
-            "app/Helpers/FireHelper.php"
+            "app/Helpers/FireHelper.php",
+            "app/Helpers/SocketHelper.php"
         ]
     },
     "autoload-dev": {

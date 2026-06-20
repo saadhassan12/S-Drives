@@ -11,36 +11,44 @@ return new class extends Migration
      */
     public function up(): void
     {
-        Schema::create('users', function (Blueprint $table) {
-            $table->id();
-            $table->string('first_name');
-            $table->string('last_name')->nullable();
-            $table->string('mobile_number')->unique()->nullable();
-            $table->string('email')->nullable()->unique();
-            $table->date('date_of_birth')->nullable();
-            $table->integer('gender')->nullable()->comment('1 => female , 2 => trans-gender');
-            $table->timestamp('otp_verified_at')->nullable();
-            $table->string('profile_picture')->nullable();
-            $table->integer('role')->nullable()->comment('1 => passenger , 2 => driver');
-            $table->decimal('latitude', 10, 7)->nullable();
-            $table->decimal('longitude', 10, 7)->nullable();
-            $table->rememberToken();
-            $table->softDeletes();
-            $table->timestamps();
-        });
-        Schema::create('password_reset_tokens', function (Blueprint $table) {
-            $table->string('email')->primary();
-            $table->string('token');
-            $table->timestamp('created_at')->nullable();
-        });
-        Schema::create('sessions', function (Blueprint $table) {
-            $table->string('id')->primary();
-            $table->foreignId('user_id')->nullable()->index();
-            $table->string('ip_address', 45)->nullable();
-            $table->text('user_agent')->nullable();
-            $table->longText('payload');
-            $table->integer('last_activity')->index();
-        });
+        if (!Schema::hasTable('users')) {
+            Schema::create('users', function (Blueprint $table) {
+                $table->id();
+                $table->string('first_name');
+                $table->string('last_name')->nullable();
+                $table->string('mobile_number')->unique()->nullable();
+                $table->string('email')->nullable()->unique();
+                $table->date('date_of_birth')->nullable();
+                $table->integer('gender')->nullable()->comment('1 => female , 2 => trans-gender');
+                $table->timestamp('otp_verified_at')->nullable();
+                $table->string('profile_picture')->nullable();
+                $table->integer('role')->nullable()->comment('1 => passenger , 2 => driver');
+                $table->decimal('latitude', 10, 7)->nullable();
+                $table->decimal('longitude', 10, 7)->nullable();
+                $table->rememberToken();
+                $table->softDeletes();
+                $table->timestamps();
+            });
+        }
+
+        if (!Schema::hasTable('password_reset_tokens')) {
+            Schema::create('password_reset_tokens', function (Blueprint $table) {
+                $table->string('email')->primary();
+                $table->string('token');
+                $table->timestamp('created_at')->nullable();
+            });
+        }
+
+        if (!Schema::hasTable('sessions')) {
+            Schema::create('sessions', function (Blueprint $table) {
+                $table->string('id')->primary();
+                $table->foreignId('user_id')->nullable()->index();
+                $table->string('ip_address', 45)->nullable();
+                $table->text('user_agent')->nullable();
+                $table->longText('payload');
+                $table->integer('last_activity')->index();
+            });
+        }
     }
 
     /**

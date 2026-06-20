@@ -2,12 +2,14 @@
 
 use App\Http\Controllers\AddressController;
 use App\Http\Controllers\BidController;
+use App\Http\Controllers\ChatController;
 use App\Http\Controllers\DriverController;
 use App\Http\Controllers\ModeController;
 use App\Http\Controllers\UserController;
 use App\Http\Controllers\DropDownController;
 use App\Http\Controllers\RatingController;
 use App\Http\Controllers\RidesController;
+use App\Http\Controllers\SocketController;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Route;
 use App\Http\Middleware\AutoLogout;
@@ -32,6 +34,14 @@ Route::controller(UserController::class)->middleware(['auth:api', AutoLogout::cl
     Route::get('/users/{id}', 'softDeleteUser')->name('users.softDelete');
 
 });
+
+Route::controller(SocketController::class)->middleware(['auth:api'])->group(function () {
+    Route::get('/socket/me', 'me');
+});
+
+Route::controller(SocketController::class)->group(function () {
+    Route::post('/socket/internal/presence', 'updatePresence');
+});
 // passenger
 Route::controller(ModeController::class)->middleware(['auth:api', AutoLogout::class])->group(function () {
     Route::get('/passenger-mode',  'passengermood')->name('passenger.mood');
@@ -48,10 +58,10 @@ Route::controller(DriverController::class)
             Route::get('/near/by/ride', 'near_ride');
             Route::get('/{id}', 'getCaptainById');
             Route::post('/reach/{rideId}', 'driverreach');
-            Route::get('ride/accept', 'getAcceptedRides');
-            Route::get('all/ridebydriver', 'ridebydriver');
-            Route::get('all/completeride', 'completeride');
-            Route::get('all/totalammountdata', 'totalammountdata');
+            Route::get('/ride/accept', 'getAcceptedRides');
+            Route::get('/all/ridebydriver', 'ridebydriver');
+            Route::get('/all/completeride', 'completeride');
+            Route::get('/all/totalammountdata', 'totalammountdata');
             Route::post('/startedride/{rideId}', 'startedride');
             Route::post('/pickride/{rideId}', 'pickride');
             Route::post('/{rideId}/complete', 'completeRidesby');
@@ -99,6 +109,16 @@ Route::controller(RidesController::class)->middleware(['auth:api', AutoLogout::c
     
      Route::get('/ride/{rideId}/get-rate-customer', [RatingController::class, 'getrateCustomer']);
     Route::get('/ride/{rideId}/get-rate-driver', [RatingController::class, 'getrateDriver']);
+});
+
+Route::controller(ChatController::class)->middleware(['auth:api', AutoLogout::class])->group(function () {
+    Route::get('/chat/rooms', 'rooms');
+    Route::get('/chat/rides/{ride}/messages', 'messagesByRide');
+    Route::get('/chat/rides/{ride}/presence', 'presenceByRide');
+    Route::get('/chat/rooms/{room}/messages', 'messages');
+    Route::get('/chat/rooms/{room}/presence', 'presence');
+    Route::post('/chat/messages', 'sendMessage');
+    Route::post('/chat/upload-image', 'uploadImage');
 });
 
 

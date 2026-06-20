@@ -4,6 +4,7 @@ namespace App\Http\Controllers;
 
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Cache;
+use App\Models\ChatRoom;
 use App\Models\Cnic;
 use App\Models\DriverLicenses;
 use App\Models\Vehicles;
@@ -389,20 +390,24 @@ public function near_ride()
     $driverLatitude = $user->latitude;
     $driverLongitude = $user->longitude;
 
+    [$minLat, $maxLat, $minLng, $maxLng] = $this->getNearbyBounds($driverLatitude, $driverLongitude, 10);
+
     $ridesToUpdate = Ride::whereIn('vehicle_category_id', $allowedCategories)
-        ->whereRaw("
-            (6371 * acos(
-                cos(radians(?)) *
-                cos(radians(start_latitude)) *
-                cos(radians(start_longitude) - radians(?)) +
-                sin(radians(?)) *
-                sin(radians(start_latitude))
-            )) <= 10", [$driverLatitude, $driverLongitude, $driverLatitude])
+        ->whereBetween('start_latitude', [$minLat, $maxLat])
+        ->whereBetween('start_longitude', [$minLng, $maxLng])
         ->where('status', 'in_progress')
         ->where('time_out', 0)
         ->whereDate('created_at', $today)
         ->with(['user', 'vehicleCategory'])
-        ->get();
+        ->get()
+        ->filter(function ($ride) use ($driverLatitude, $driverLongitude) {
+            return $this->calculateDistance(
+                $driverLatitude,
+                $driverLongitude,
+                $ride->start_latitude,
+                $ride->start_longitude
+            ) <= 10;
+        });
 
     if ($ridesToUpdate->isNotEmpty()) {
 
@@ -443,6 +448,30 @@ public function near_ride()
     return apiResponse([], 'Ride not found', 200, false);
 }
 
+    protected function calculateDistance($startLat, $startLong, $endLat, $endLong)
+    {
+        $earthRadius = 6371;
+        $latDistance = deg2rad($endLat - $startLat);
+        $lonDistance = deg2rad($endLong - $startLong);
+        $a = sin($latDistance / 2) * sin($latDistance / 2) +
+            cos(deg2rad($startLat)) * cos(deg2rad($endLat)) *
+            sin($lonDistance / 2) * sin($lonDistance / 2);
+        $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
+        return $earthRadius * $c;
+    }
+
+    protected function getNearbyBounds(float $latitude, float $longitude, float $distanceKm): array
+    {
+        $latDelta = $distanceKm / 111.0;
+        $lngDelta = $distanceKm / max(0.00001, 111.320 * cos(deg2rad($latitude)));
+
+        return [
+            $latitude - $latDelta,
+            $latitude + $latDelta,
+            $longitude - $lngDelta,
+            $longitude + $lngDelta,
+        ];
+    }
 
     public function getCaptainById($id)
     {
@@ -450,10 +479,9 @@ public function near_ride()
             ->where('id', $id)
             ->where('role', 'driver')
             ->find($id);
-        $rides = Ride::whereIn('status', ['completed'])
+        $completedCount = Ride::where('status', 'completed')
             ->where('driver_id', $id)
-            ->get();
-        $completedCount = $rides->where('status', 'completed')->count();
+            ->count();
         $averageRating = Rating::where('rated_to', $id)->avg('rating');
         return apiResponse([
             'captian' => $captain,
@@ -539,13 +567,12 @@ public function near_ride()
 
         $rides = Ride::whereIn('status', ['started_ride', 'accepted','driver_reach','ride_pick'])
             ->where('driver_id', auth()->id())
-            ->with(['driver', 'user_pe'])
+            ->with(['driver', 'user_pe', 'chatRoom'])
             ->get();
          
-            $ridecomp = Ride::whereIn('status', ['completed'])
+        $completedCount = Ride::where('status', 'completed')
             ->where('driver_id', auth()->id())
-            ->get();
-        $completedCount = $ridecomp->where('status', 'completed')->count();
+            ->count();
         $averageRating = Rating::where('rated_to', auth()->id())->avg('rating');
 
         return apiResponse(['ride'=>$rides, 'average_rating' => round($averageRating, 2),
@@ -571,7 +598,9 @@ public function near_ride()
             ->get();
 
         // Count completed rides
-        $completedCount = $rides->where('status', 'completed')->count();
+        $completedCount = Ride::where('status', 'completed')
+            ->where('driver_id', $driverId)
+            ->count();
 
         return apiResponse([
             'rides' => $rides,
@@ -607,6 +636,11 @@ public function near_ride()
     $ride->status = 'completed';
     $ride->save();
 
+    ChatRoom::where('ride_id', $ride->id)->update([
+        'status' => 'closed',
+        'ended_at' => now(),
+    ]);
+
     $firebaseResponse = null;
 
     // ✅ Sirf Passenger ko notification bhejna hai (ride->user_id)
@@ -616,13 +650,7 @@ public function near_ride()
             $firebaseResponse = send_firebase_notification(
                 'Ride Completed',
                 'Your ride has been completed. Don’t forget to rate your captain!',
-                $passenger->device_token,
-                [
-                    'ride_id' => $ride->id,
-                    'status'  => 'completed',
-                ],
-                'high_importance_channel', // channel ID
-                'notification'             // sound name
+                $passenger->device_token
             );
         } catch (\Exception $e) {
             \Log::error('Firebase Notification Error (Passenger): ' . $e->getMessage());

@@ -2,6 +2,7 @@
 
 namespace App\Http\Controllers;
 
+use App\Models\ChatRoom;
 use App\Models\CancelRide;
 use App\Models\Ride;
 use App\Models\Bid;
@@ -32,6 +33,19 @@ class RidesController extends Controller
         $c = 2 * atan2(sqrt($a), sqrt(1 - $a));
         $distance = $earthRadius * $c; // Distance in km
         return $distance;
+    }
+
+    protected function getNearbyBounds(float $latitude, float $longitude, float $distanceKm): array
+    {
+        $latDelta = $distanceKm / 111.0;
+        $lngDelta = $distanceKm / max(0.00001, 111.320 * cos(deg2rad($latitude)));
+
+        return [
+            $latitude - $latDelta,
+            $latitude + $latDelta,
+            $longitude - $lngDelta,
+            $longitude + $lngDelta,
+        ];
     }
     
     
@@ -204,33 +218,55 @@ public function updateBooking(Request $request, $id)
     $categoryIds = $compatibleCategories[$vehicleCategory->id] ?? [$vehicleCategory->id];
 
     // ? Nearby drivers
-    $drivers = User::where('role', 'driver')
+    [$minLat, $maxLat, $minLng, $maxLng] = $this->getNearbyBounds($ride->start_latitude, $ride->start_longitude, 15);
+
+    $drivers = User::select('id', 'latitude', 'longitude', 'device_token')
+        ->where('role', 'driver')
         ->where('last_login_at', 1)
         ->whereNotNull('latitude')
         ->whereNotNull('longitude')
+        ->whereBetween('latitude', [$minLat, $maxLat])
+        ->whereBetween('longitude', [$minLng, $maxLng])
         ->whereHas('vehicles', function ($query) use ($categoryIds) {
             $query->whereIn('vehicle_category_id', $categoryIds);
         })
-        ->get();
-
-    $nearbyDrivers = $drivers->filter(function ($driver) use ($ride) {
-        $distance = $this->calculateDistance(
-            $ride->start_latitude,
-            $ride->start_longitude,
-            $driver->latitude,
-            $driver->longitude
-        );
-        return $distance <= 15;
-    });
+        ->get()
+        ->filter(function ($driver) use ($ride) {
+            return $this->calculateDistance(
+                $ride->start_latitude,
+                $ride->start_longitude,
+                $driver->latitude,
+                $driver->longitude
+            ) <= 15;
+        });
 
     // ? Send Firebase notifications
-    foreach ($nearbyDrivers as $driver) {
+    foreach ($drivers as $driver) {
         if ($driver->device_token) {
             $firebaseResponses = send_firebase_notification(
     'New Ride Available',
     'A passenger nearby is requesting a ride. Accept now before it\'s gone.',
     $driver->device_token
 );        }
+    }
+
+    // 🚀 REAL-TIME: Broadcast to nearby drivers via socket
+    $driverIds = $drivers->pluck('id')->toArray();
+    if (!empty($driverIds)) {
+        notify_drivers_new_ride($driverIds, [
+            'ride_id' => $ride->id,
+            'start' => $ride->start,
+            'destination' => $ride->destination,
+            'estimated_fare' => $ride->estimated_fare,
+            'distance' => $this->calculateDistance(
+                $ride->start_latitude,
+                $ride->start_longitude,
+                $ride->end_latitude,
+                $ride->end_longitude
+            ),
+            'vehicle_category_id' => $ride->vehicle_category_id,
+            'status' => $ride->status,
+        ]);
     }
 
     return apiResponse( $ride,'Vehicle category and fare updated successfully, notifications sent to nearby drivers');
@@ -288,6 +324,11 @@ public function updateBooking(Request $request, $id)
 $ride->status = 'canceled';
 $ride->save();
 
+    ChatRoom::where('ride_id', $ride->id)->update([
+        'status' => 'closed',
+        'ended_at' => now(),
+    ]);
+
     $notifyUser = null;
     if ($user->role === 'passenger') {
         $notifyUser = User::find($ride->passenger_id ?? $ride->user_id);
@@ -303,16 +344,25 @@ $ride->save();
         $firebaseResponse = send_firebase_notification(
             'Ride Canceled',
             'Your ride has been canceled. You can request/accept a new ride anytime.',
-            $notifyUser->device_token,
-            [
-                'ride_id'     => $ride->id,
-                'status'      => 'canceled',
-                'canceled_by' => $user->role,
-            ],
-            'high_importance_channel',
-            'notification'
+            $notifyUser->device_token
         );
     }
+
+    // 🚀 REAL-TIME: Notify via socket
+    if ($notifyUser) {
+        notify_passenger_ride_update($notifyUser->id, [
+            'ride_id' => $ride->id,
+            'canceled_by' => $user->role,
+            'reason' => $request->reason,
+        ], 'canceled');
+    }
+
+    // 🔄 REFRESH: Auto-refresh all drivers' nearby rides list (remove canceled ride)
+    refresh_all_drivers_list('ride_canceled', [
+        'ride_id' => $ride->id,
+        'status' => 'canceled',
+    ]);
+
     return apiResponse( 'Ride canceled successfully', 200);
 }
 
@@ -327,35 +377,48 @@ public function updateBidAmount(Request $request, $ride_id)
 if ($ride) {
     
     $ride->final_fare = $amountChanges;
-    
-    $ride->update();
-    $firebaseResponse =null;
-    
-  $drivers  = User::where('role', 'driver')
-    ->whereHas('vehicles', function ($q) use ($ride) {
-        $q->where('vehicle_category_id', $ride->vehicle_category_id);
-    })
-    ->whereRaw("
-        (6371 * acos(
-            cos(radians(?)) *
-            cos(radians(latitude)) *
-            cos(radians(longitude) - radians(?)) +
-            sin(radians(?)) *
-            sin(radians(latitude))
-        )) <= 10", [$ride->start_latitude, $ride->start_longitude, $ride->start_latitude])
-    ->get();
-    foreach ($drivers as $driver) {
+    $ride->save();
+    $firebaseResponse = null;
+
+    [$minLat, $maxLat, $minLng, $maxLng] = $this->getNearbyBounds($ride->start_latitude, $ride->start_longitude, 10);
+    $drivers = User::select('id', 'latitude', 'longitude', 'device_token')
+      ->where('role', 'driver')
+      ->whereNotNull('latitude')
+      ->whereNotNull('longitude')
+      ->whereBetween('latitude', [$minLat, $maxLat])
+      ->whereBetween('longitude', [$minLng, $maxLng])
+      ->whereHas('vehicles', function ($q) use ($ride) {
+          $q->where('vehicle_category_id', $ride->vehicle_category_id);
+      })
+      ->get()
+      ->filter(function ($driver) use ($ride) {
+          return $this->calculateDistance(
+              $ride->start_latitude,
+              $ride->start_longitude,
+              $driver->latitude,
+              $driver->longitude
+          ) <= 10;
+      });
+      foreach ($drivers as $driver) {
         if (!empty($driver->device_token)) {
            $firebaseResponse = send_firebase_notification(
                 'Fare Updated',
                 'Ride Fare has been updated to ' . $amountChanges,
-                $driver->device_token,
-                [
-                    'ride_id'    => $ride->id,
-                    'final_fare' => $amountChanges
-                ]
+                $driver->device_token
             );
         }
+    }
+
+    // 🚀 REAL-TIME: Notify nearby drivers via socket
+    $driverIds = $drivers->pluck('id')->toArray();
+    if (!empty($driverIds)) {
+        notify_drivers_new_ride($driverIds, [
+            'ride_id' => $ride->id,
+            'final_fare' => $ride->final_fare,
+            'fare_updated' => true,
+            'start' => $ride->start,
+            'destination' => $ride->destination,
+        ]);
     }
 }
 
@@ -373,6 +436,7 @@ return apiResponse(
   public function getActiveBids($rideId)
     {
         $oldBids = Bid::where('ride_id', $rideId)
+         ->where('status','pending')
          ->with(['driver','vehicles'])
          ->get();
         if ($oldBids->isNotEmpty()) {
@@ -390,7 +454,7 @@ return apiResponse(
     {
         $rides = Ride::whereIn('status', ['started_ride','in_progress', 'accepted','driver_reach','ride_pick'])
             ->where('user_id', auth()->id())
-            ->with(['driver', 'user_pe','vehicles','ratings'])
+            ->with(['driver', 'user_pe', 'vehicles', 'ratings', 'chatRoom'])
             ->get();
         return apiResponse($rides, 'Accepted rides with assigned drivers retrieved successfully.');
     }
@@ -501,7 +565,7 @@ public function applyPromoCode(Request $request, $rideId)
             return $vehicle;
         });
 
-    // ? Update ride with promo code (optional � keeps last fare updated)
+    // ? Update ride with promo code (optional � keeps last fare updated)
     DB::table('rides')->where('id', $rideId)->update([
         'promo_code' => $promo->code,
         'updated_at' => now(),
