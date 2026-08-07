@@ -193,7 +193,7 @@ public function getOtp(Request $request)
             'date_of_birth' => 'nullable|date',
             'gender' => 'nullable|in:1,2',
             'role' => 'nullable|in:1,2',
-            'profile_picture' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:4048', 
+            'profile_picture' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
             'mobile_number' => 'required|unique:users,mobile_number|regex:/^(\+92)[0-9]{10}$/',
             'device_token' => 'nullable',
         ]);
@@ -243,7 +243,7 @@ public function getOtp(Request $request)
             'date_of_birth' => 'nullable|date',
             'gender' => 'nullable|in:1,2',
             'role' => 'nullable|in:1,2',
-            'profile_picture' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:4048',
+            'profile_picture' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
             'mobile_number' => 'required|unique:users,mobile_number,' . $user->id . '|regex:/^(\+92)[0-9]{10}$/',
         ]);
         $mobile_number = $request->input('mobile_number');

@@ -243,6 +243,74 @@
     // 🚀 AUTO-FETCH: Send nearby rides immediately after connection (for drivers)
     // Store driver status for future updates
     let isDriver = false;
+
+    const RIDE_VISIBILITY_MS = 30000;
+    let rideHideTimer = null;
+
+    const scheduleRideHideIfNeeded = (count, source = "unknown") => {
+      if (rideHideTimer) {
+        clearTimeout(rideHideTimer);
+        rideHideTimer = null;
+      }
+
+      if (count > 0) {
+        console.log(
+          "[socket] ⏱ Scheduling ride hide in %ds for driver user_id=%s (source=%s)",
+          RIDE_VISIBILITY_MS / 1000,
+          userId,
+          source
+        );
+
+        rideHideTimer = setTimeout(() => {
+          console.log(
+            "[socket] 🙈 Auto-hiding rides after %ds for driver user_id=%s",
+            RIDE_VISIBILITY_MS / 1000,
+            userId
+          );
+          socket.emit("driver:nearby-rides:list", {
+            success: true,
+            data: [],
+            count: 0,
+            timestamp: new Date().toISOString(),
+            hidden: true,
+            reason: "visibility_timeout",
+          });
+          rideHideTimer = null;
+        }, RIDE_VISIBILITY_MS);
+      }
+    };
+
+    const emitNearbyRidesWithAutoHide = (responseData, source = "unknown") => {
+      socket.emit("driver:nearby-rides:list", responseData);
+      const count = responseData?.count ?? responseData?.data?.length ?? 0;
+      scheduleRideHideIfNeeded(count, source);
+    };
+
+    // Helper function to refresh nearby rides for this driver
+    const refreshNearbyRides = async () => {
+      if (!socket.data.isDriver) return;
+      
+      try {
+        const nearbyRides = await laravelFetch("/api/driver/near/by/ride", {
+          method: "GET",
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        
+        console.log("[socket] 🔄 Refreshing nearby rides for driver user_id=%s, count=%d", 
+          userId, nearbyRides?.data?.length || 0);
+        
+        emitNearbyRidesWithAutoHide({
+          success: true,
+          data: nearbyRides?.data || [],
+          count: nearbyRides?.data?.length || 0,
+          timestamp: new Date().toISOString(),
+        }, "refresh");
+      } catch (error) {
+        console.error("[socket] ✗ Refresh nearby rides error:", error.message);
+      }
+    };
     
     (async () => {
       try {
@@ -259,54 +327,12 @@
           socket.data.isDriver = true;
           console.log("[socket] ✓ Driver connected - auto-fetching nearby rides for user_id=%s", userId);
           
-          const nearbyRides = await laravelFetch("/api/driver/near/by/ride", {
-            method: "GET",
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-          });
-          
-          console.log("[socket] ✓ Auto-send nearby rides: %d rides found for driver user_id=%s", 
-            nearbyRides?.data?.length || 0, userId);
-          
-          // Send to driver automatically in list format
-          socket.emit("driver:nearby-rides:list", {
-            success: true,
-            data: nearbyRides?.data || [],
-            count: nearbyRides?.data?.length || 0,
-            timestamp: new Date().toISOString(),
-          });
+          await refreshNearbyRides();
         }
       } catch (error) {
         console.error("[socket] ✗ Auto-fetch nearby rides error:", error.message);
       }
     })();
-    
-    // Helper function to refresh nearby rides for this driver
-    const refreshNearbyRides = async () => {
-      if (!socket.data.isDriver) return;
-      
-      try {
-        const nearbyRides = await laravelFetch("/api/driver/near/by/ride", {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
-        });
-        
-        console.log("[socket] 🔄 Refreshing nearby rides for driver user_id=%s, count=%d", 
-          userId, nearbyRides?.data?.length || 0);
-        
-        socket.emit("driver:nearby-rides:list", {
-          success: true,
-          data: nearbyRides?.data || [],
-          count: nearbyRides?.data?.length || 0,
-          timestamp: new Date().toISOString(),
-        });
-      } catch (error) {
-        console.error("[socket] ✗ Refresh nearby rides error:", error.message);
-      }
-    };
     
     // Store refresh function for use in broadcast events
     socket.data.refreshNearbyRides = refreshNearbyRides;
@@ -458,9 +484,10 @@
         if (typeof callback === "function") {
           console.log("[socket] driver:nearby-rides - sending response via callback (ACK)");
           callback(responseData);
+          scheduleRideHideIfNeeded(responseData.count, "manual-callback");
         } else {
           console.log("[socket] driver:nearby-rides - broadcasting via emit:driver:nearby-rides:list");
-          socket.emit("driver:nearby-rides:list", responseData);
+          emitNearbyRidesWithAutoHide(responseData, "manual");
         }
         console.log("[socket] ✓ driver:nearby-rides - response sent successfully");
       } catch (error) {
@@ -1052,6 +1079,10 @@
 
     socket.on("disconnect", async (reason) => {
       console.log("[socket] disconnected sid=%s reason=%s user_id=%s", socket.id, reason, userId);
+      if (rideHideTimer) {
+        clearTimeout(rideHideTimer);
+        rideHideTimer = null;
+      }
       const meta = socketMeta.get(socket.id);
       if (!meta) return;
 

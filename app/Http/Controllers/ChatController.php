@@ -132,7 +132,7 @@ class ChatController extends Controller
     public function uploadImage(Request $request)
     {
         $request->validate([
-            'image' => 'required|image|mimes:jpg,jpeg,png,webp|max:12288',
+            'image' => 'required|image|mimes:jpg,jpeg,png,webp|max:' . config('upload.max_image_kb'),
         ]);
 
         $path = $request->file('image')->store('chat-images', 'public');

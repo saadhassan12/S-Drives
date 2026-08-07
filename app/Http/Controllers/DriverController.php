@@ -22,9 +22,9 @@ class DriverController extends Controller
         $request->validate([
             'cnic_no' => 'required|string|max:255',
             'exp_date' => 'required|string|max:255',
-            'front_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
-            'back_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
-            'selfie_with_id' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
+            'front_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
+            'back_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
+            'selfie_with_id' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
         ]);
         if ($request->hasFile('front_pic')) {
             $file = $request->file('front_pic');
@@ -50,14 +50,22 @@ class DriverController extends Controller
         }else{
             $selfie = null;
         }
-        $cinc = Cnic::updateOrCreate([
-            'user_id' => auth()->id(),
-            'cnic_no' => $request->input('cnic_no'),
-            'exp_date' => $request->input('exp_date'),
-            'front_pic' => $cnic_front,
-            'back_pic' => $back_pic,
-            'selfie_with_id' => $selfie,
-        ]);
+
+        $userId = auth()->id();
+        $existing = Cnic::where('user_id', $userId)->latest('id')->first();
+
+        $cinc = Cnic::updateOrCreate(
+            ['user_id' => $userId],
+            [
+                'cnic_no' => $request->input('cnic_no'),
+                'exp_date' => $request->input('exp_date'),
+                'front_pic' => $cnic_front ?? $existing?->front_pic,
+                'back_pic' => $back_pic ?? $existing?->back_pic,
+                'selfie_with_id' => $selfie ?? $existing?->selfie_with_id,
+            ]
+        );
+
+        Cnic::where('user_id', $userId)->where('id', '!=', $cinc->id)->delete();
         $cnicData = Cnic::with('user')->find($cinc->id);
         return apiResponse(
             $cnicData,
@@ -69,9 +77,9 @@ class DriverController extends Controller
         $request->validate([
             'license_no' => 'required|string|max:255',
             'expiration_date' => 'required|string|max:255',
-            'licenses_front_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
-            'licenses_back_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
-            'selfie_with_licenses' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
+            'licenses_front_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
+            'licenses_back_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
+            'selfie_with_licenses' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
         ]);
         if ($request->hasFile('licenses_front_pic')) {
             $file = $request->file('licenses_front_pic');
@@ -97,14 +105,22 @@ class DriverController extends Controller
         }else{
             $selfie = null;
         }
-        $DriverLicenses = DriverLicenses::updateOrCreate([
-            'user_id' => auth()->id(),
-            'license_no' => $request->input('license_no'),
-            'expiration_date' => $request->input('expiration_date'),
-            'licenses_front_pic' => $licenses_front_pic,
-            'licenses_back_pic' => $licenses_back_pic,
-            'selfie_with_licenses' => $selfie,
-        ]);
+
+        $userId = auth()->id();
+        $existing = DriverLicenses::where('user_id', $userId)->latest('id')->first();
+
+        $DriverLicenses = DriverLicenses::updateOrCreate(
+            ['user_id' => $userId],
+            [
+                'license_no' => $request->input('license_no'),
+                'expiration_date' => $request->input('expiration_date'),
+                'licenses_front_pic' => $licenses_front_pic ?? $existing?->licenses_front_pic,
+                'licenses_back_pic' => $licenses_back_pic ?? $existing?->licenses_back_pic,
+                'selfie_with_licenses' => $selfie ?? $existing?->selfie_with_licenses,
+            ]
+        );
+
+        DriverLicenses::where('user_id', $userId)->where('id', '!=', $DriverLicenses->id)->delete();
         $DriverLicensesdata = DriverLicenses::with('user')->find($DriverLicenses->id);
         return apiResponse(
             $DriverLicensesdata,
@@ -120,12 +136,12 @@ class DriverController extends Controller
             'manufacture_model' => 'nullable|string|max:255',
             'manufacture_company' => 'nullable|string|max:255',
             'registration_number' => 'nullable|string|max:255',
-            'vehicle_front_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
-            'vehicle_back_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
-            'vehicle_dashboard' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
-            'vehicle_certificate_front' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
-            'vehicle_certificate_back' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
-            'interior' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:10240',
+            'vehicle_front_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
+            'vehicle_back_pic' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
+            'vehicle_dashboard' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
+            'vehicle_certificate_front' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
+            'vehicle_certificate_back' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
+            'interior' => 'nullable|image|mimes:jpg,jpeg,png,gif|max:' . config('upload.max_image_kb'),
         ]);
         if ($request->hasFile('vehicle_front_pic')) {
             $file = $request->file('vehicle_front_pic');
@@ -176,22 +192,30 @@ class DriverController extends Controller
         }else{
             $interior = null;
         }
-        $Vehicles = Vehicles::updateOrCreate([
-            'user_id' => auth()->id(),
-            'vehicle_category_id' => $request->input('vehicle_category_id'),
-            'engine' => $request->input('engine'),
-            'manufacture_year' => $request->input('manufacture_year'),
-            'manufacture_model' => $request->input('manufacture_model'),
-            'manufacture_company' => $request->input('manufacture_company'),
-            'courier_servies' => $request->input('courier_servies'),
-            'registration_number' => $request->input('registration_number'),
-            'vehicle_front_pic' => $vehicle_front_pic,
-            'vehicle_back_pic' => $vehicle_back_pic,
-            'vehicle_dashboard' => $vehicle_dashboard,
-            'vehicle_certificate_front' => $vehicle_certificate_front,
-            'vehicle_certificate_back' => $vehicle_certificate_back,
-            'interior' => $interior,
-        ]);
+
+        $userId = auth()->id();
+        $existing = Vehicles::where('user_id', $userId)->latest('id')->first();
+
+        $Vehicles = Vehicles::updateOrCreate(
+            ['user_id' => $userId],
+            [
+                'vehicle_category_id' => $request->input('vehicle_category_id'),
+                'engine' => $request->input('engine'),
+                'manufacture_year' => $request->input('manufacture_year'),
+                'manufacture_model' => $request->input('manufacture_model'),
+                'manufacture_company' => $request->input('manufacture_company'),
+                'courier_servies' => $request->input('courier_servies'),
+                'registration_number' => $request->input('registration_number'),
+                'vehicle_front_pic' => $vehicle_front_pic ?? $existing?->vehicle_front_pic,
+                'vehicle_back_pic' => $vehicle_back_pic ?? $existing?->vehicle_back_pic,
+                'vehicle_dashboard' => $vehicle_dashboard ?? $existing?->vehicle_dashboard,
+                'vehicle_certificate_front' => $vehicle_certificate_front ?? $existing?->vehicle_certificate_front,
+                'vehicle_certificate_back' => $vehicle_certificate_back ?? $existing?->vehicle_certificate_back,
+                'interior' => $interior ?? $existing?->interior,
+            ]
+        );
+
+        Vehicles::where('user_id', $userId)->where('id', '!=', $Vehicles->id)->delete();
         $Vehiclesdata = Vehicles::with('user','vehicle')->find($Vehicles->id);
         return apiResponse(
             $Vehiclesdata,
@@ -401,47 +425,21 @@ public function near_ride()
         ->with(['user', 'vehicleCategory'])
         ->get()
         ->filter(function ($ride) use ($driverLatitude, $driverLongitude) {
-            return $this->calculateDistance(
+            if ($this->calculateDistance(
                 $driverLatitude,
                 $driverLongitude,
                 $ride->start_latitude,
                 $ride->start_longitude
-            ) <= 10;
-        });
+            ) > 10) {
+                return false;
+            }
+
+            // Show only for 30 seconds after ride create / fare update (updated_at refresh)
+            return $ride->updated_at && $ride->updated_at->gte(now()->subSeconds(30));
+        })
+        ->values();
 
     if ($ridesToUpdate->isNotEmpty()) {
-
-        foreach ($ridesToUpdate as $ride) {
-
-            // ???? TIMEOUT SYSTEM REMOVED HERE  
-            // NO auto cancel
-            // NO timeout check
-            // NO timeout notification
-
-            $cacheKey = 'driver_' . $user->id . '_last_ride';
-            $lastRideId = Cache::get($cacheKey);
-
-            if ($lastRideId && $lastRideId == $ride->id) {
-                continue;
-            }
-
-            if (!empty($user->device_token)) {
-                // Notification send karna ho to yahan add kar sakte ho
-                // FireBase notification commented intentionally
-
-                // send_firebase_notification(
-                //     'Nearby Ride Found',
-                //     'A passenger nearby is requesting a ride.',
-                //     $user->device_token,
-                //     ['ride_id' => $ride->id]
-                // );
-
-                Cache::put($cacheKey, $ride->id, now()->addMinutes(15));
-            }
-
-            break;
-        }
-
         return apiResponse($ridesToUpdate, 'Nearby rides fetched successfully.', 200);
     }
 

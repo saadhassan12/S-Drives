@@ -68,15 +68,15 @@ class User extends Authenticatable
 
     public function driverCnic()
     {
-        return $this->hasOne(Cnic::class);
+        return $this->hasOne(Cnic::class)->latestOfMany();
     }
     public function driverliceses()
     {
-        return $this->hasOne(DriverLicenses::class);
+        return $this->hasOne(DriverLicenses::class)->latestOfMany();
     }
     public function vehicles()
     {
-        return $this->hasOne(Vehicles::class);
+        return $this->hasOne(Vehicles::class)->latestOfMany();
     }
     public function ride()
     {

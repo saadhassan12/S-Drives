@@ -1,5 +1,6 @@
 <?php
 
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -69,6 +70,30 @@ if (!function_exists('notify_users_socket')) {
 }
 
 /**
+ * Mark a ride as visible to specific drivers for a short window (default 30 seconds).
+ * After the window expires, near_ride() stops returning it until re-marked (new ride / fare update).
+ */
+if (!function_exists('mark_ride_visible_for_drivers')) {
+    function mark_ride_visible_for_drivers(array $driverIds, int $rideId, int $seconds = 30): void
+    {
+        foreach ($driverIds as $driverId) {
+            Cache::put(
+                "driver_{$driverId}_ride_{$rideId}_visible",
+                true,
+                now()->addSeconds($seconds)
+            );
+        }
+    }
+}
+
+if (!function_exists('is_ride_visible_for_driver')) {
+    function is_ride_visible_for_driver(int $driverId, int $rideId): bool
+    {
+        return Cache::has("driver_{$driverId}_ride_{$rideId}_visible");
+    }
+}
+
+/**
  * Notify all online drivers about a new ride and refresh their lists
  * 
  * @param array $driverIds Driver user IDs to notify
@@ -78,6 +103,10 @@ if (!function_exists('notify_users_socket')) {
 if (!function_exists('notify_drivers_new_ride')) {
     function notify_drivers_new_ride(array $driverIds, array $rideData): bool
     {
+        if (!empty($rideData['ride_id'])) {
+            mark_ride_visible_for_drivers($driverIds, (int) $rideData['ride_id'], 30);
+        }
+
         // Broadcast event AND auto-refresh all online drivers' nearby rides list
         return broadcast_socket_event('driver:new-ride-available', [
             'ride' => $rideData,
