@@ -124,22 +124,47 @@
     return body;
   }
 
-  async function setPresence(userId, online) {
+  async function touchActivity(userId) {
     if (!SOCKET_INTERNAL_SECRET) {
       return;
     }
 
     try {
+      await laravelFetch("/api/socket/internal/activity", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-socket-secret": SOCKET_INTERNAL_SECRET,
+        },
+        body: JSON.stringify({ user_id: userId }),
+      });
+    } catch (error) {
+      console.error("Activity touch failed:", error.message);
+    }
+  }
+
+  async function setPresence(userId, online, appForeground = null) {
+    if (!SOCKET_INTERNAL_SECRET) {
+      return;
+    }
+
+    try {
+      const payload = {
+        user_id: userId,
+        is_online: !!online,
+      };
+
+      if (appForeground !== null) {
+        payload.is_app_foreground = !!appForeground;
+      }
+
       await laravelFetch("/api/socket/internal/presence", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           "x-socket-secret": SOCKET_INTERNAL_SECRET,
         },
-        body: JSON.stringify({
-          user_id: userId,
-          is_online: !!online,
-        }),
+        body: JSON.stringify(payload),
       });
     } catch (error) {
       console.error("Presence update failed:", error.message);
@@ -232,7 +257,7 @@
     roomIds.forEach((roomId) => socket.join(`chat:${roomId}`));
 
     if (getUserOnlineCount(userId) === 1) {
-      await setPresence(userId, true);
+      await setPresence(userId, true, true);
     }
 
     socket.emit("socket:ready", {
@@ -244,7 +269,7 @@
     // Store driver status for future updates
     let isDriver = false;
 
-    const RIDE_VISIBILITY_MS = 30000;
+    const RIDE_VISIBILITY_MS = 60000;
     let rideHideTimer = null;
 
     const scheduleRideHideIfNeeded = (count, source = "unknown") => {
@@ -321,8 +346,8 @@
           },
         });
         
-        // If user is a driver, automatically send nearby rides
-        if (userData && userData.data && userData.data.role === 'driver') {
+        // Driver UI is based on role.
+        if (userData && userData.data && userData.data.role === "driver") {
           isDriver = true;
           socket.data.isDriver = true;
           console.log("[socket] ✓ Driver connected - auto-fetching nearby rides for user_id=%s", userId);
@@ -345,9 +370,17 @@
     // Log when socket events are registered for debugging
     console.log("[socket] registering event listeners for user_id=%s", userId);
 
+    let lastActivityTouch = Date.now();
+
     // Add a wildcard listener to catch ANY incoming event (for debugging)
     socket.onAny((eventName, ...args) => {
       console.log("[socket] ANY EVENT RECEIVED - user_id=%s, event=%s, args count=%d", userId, eventName, args.length);
+
+      const now = Date.now();
+      if (now - lastActivityTouch >= 15000) {
+        lastActivityTouch = now;
+        touchActivity(userId);
+      }
     });
 
     socket.on("chat:sync", async () => {
@@ -410,9 +443,10 @@
           body: JSON.stringify({
             room_id: payload.room_id ?? null,
             ride_id: payload.ride_id ?? null,
-            message_type: payload.message_type || (payload.image_url ? "image" : "text"),
+            message_type: payload.message_type || (payload.image_url || payload.image ? "image" : "text"),
             message: payload.message || null,
-            image_url: payload.image_url || null,
+            image_url: payload.image_url || payload.image || null,
+            image_base64: payload.image_base64 || null,
             meta: payload.meta || null,
           }),
         });
@@ -457,6 +491,30 @@
         callback({ user_id, is_online: online });
       } else {
         socket.emit("presence:status:result", { user_id, is_online: online });
+      }
+    });
+
+    socket.on("app:foreground", async (_payload, callback) => {
+      console.log("[socket] app:foreground - user_id=%s", userId);
+      await setPresence(userId, true, true);
+
+      const response = { ok: true, user_id: userId, is_app_foreground: true };
+      if (typeof callback === "function") {
+        callback(response);
+      } else {
+        socket.emit("app:foreground:result", response);
+      }
+    });
+
+    socket.on("app:background", async (_payload, callback) => {
+      console.log("[socket] app:background - user_id=%s", userId);
+      await setPresence(userId, true, false);
+
+      const response = { ok: true, user_id: userId, is_app_foreground: false };
+      if (typeof callback === "function") {
+        callback(response);
+      } else {
+        socket.emit("app:background:result", response);
       }
     });
     socket.on("driver:nearby-rides", async (payload, callback) => {
@@ -1091,7 +1149,7 @@
         set.delete(socket.id);
         if (set.size === 0) { 
           userSockets.delete(meta.userId);
-          await setPresence(meta.userId, false);
+          await setPresence(meta.userId, false, false);
         }
       }
 
@@ -1187,6 +1245,13 @@
           const sockets = await io.fetchSockets();
           for (const sock of sockets) {
             if (sock.data.isDriver && sock.data.refreshNearbyRides) {
+              if (data && data.visibility_reset) {
+                sock.emit("driver:ride-visibility-reset", {
+                  ride_id: data.ride_id,
+                  visibility_seconds: data.visibility_seconds || 60,
+                  reason: "bid_placed",
+                });
+              }
               await sock.data.refreshNearbyRides();
               driverRefreshCount++;
             }
@@ -1217,6 +1282,13 @@
           const sockets = await io.fetchSockets();
           for (const sock of sockets) {
             if (sock.data.isDriver && sock.data.refreshNearbyRides) {
+              if (data && data.visibility_reset) {
+                sock.emit("driver:ride-visibility-reset", {
+                  ride_id: data.ride_id,
+                  visibility_seconds: data.visibility_seconds || 60,
+                  reason: "bid_placed",
+                });
+              }
               await sock.data.refreshNearbyRides();
               driverRefreshCount++;
             }

@@ -9,7 +9,7 @@ class Kernel extends ConsoleKernel
 {
    protected function schedule(Schedule $schedule)
 {
-    $schedule->command('hit:api')->everyMinute();
+    $schedule->command('rides:cancel-expired')->everyMinute();
 }
  
 }

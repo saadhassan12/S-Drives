@@ -34,7 +34,9 @@
         "files": [
             "app/Helpers/ResponseHelper.php",
             "app/Helpers/FireHelper.php",
-            "app/Helpers/SocketHelper.php"
+            "app/Helpers/SocketHelper.php",
+            "app/Helpers/RideHelper.php",
+            "app/Helpers/BidHelper.php"
         ]
     },
     "autoload-dev": {

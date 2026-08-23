@@ -413,8 +413,9 @@ public function near_ride()
     $today = Carbon::now();
     $driverLatitude = $user->latitude;
     $driverLongitude = $user->longitude;
+    $radiusKm = driver_ride_radius_km();
 
-    [$minLat, $maxLat, $minLng, $maxLng] = $this->getNearbyBounds($driverLatitude, $driverLongitude, 10);
+    [$minLat, $maxLat, $minLng, $maxLng] = $this->getNearbyBounds($driverLatitude, $driverLongitude, $radiusKm);
 
     $ridesToUpdate = Ride::whereIn('vehicle_category_id', $allowedCategories)
         ->whereBetween('start_latitude', [$minLat, $maxLat])
@@ -424,18 +425,26 @@ public function near_ride()
         ->whereDate('created_at', $today)
         ->with(['user', 'vehicleCategory'])
         ->get()
-        ->filter(function ($ride) use ($driverLatitude, $driverLongitude) {
-            if ($this->calculateDistance(
-                $driverLatitude,
-                $driverLongitude,
-                $ride->start_latitude,
-                $ride->start_longitude
-            ) > 10) {
+        ->map(function ($ride) use ($driverLatitude, $driverLongitude, $radiusKm) {
+            $distanceKm = calculate_geo_distance_km(
+                (float) $driverLatitude,
+                (float) $driverLongitude,
+                (float) $ride->start_latitude,
+                (float) $ride->start_longitude
+            );
+
+            $ride->driver_distance_km = round($distanceKm, 2);
+            $ride->max_radius_km = $radiusKm;
+
+            return $ride;
+        })
+        ->filter(function ($ride) use ($radiusKm) {
+            if ($ride->driver_distance_km > $radiusKm) {
                 return false;
             }
 
-            // Show only for 30 seconds after ride create / fare update (updated_at refresh)
-            return $ride->updated_at && $ride->updated_at->gte(now()->subSeconds(30));
+            // Show only for configured seconds after ride create / fare update / bid
+            return $ride->updated_at && $ride->updated_at->gte(now()->subSeconds(ride_visibility_seconds()));
         })
         ->values();
 
@@ -499,10 +508,10 @@ public function near_ride()
         // ✅ Get the passenger user model (user_id refers to passenger)
         $passenger = \App\Models\User::find($ride->user_id);
         if (!empty($passenger) && !empty($passenger->device_token)) {
-            $firebaseResponse = send_firebase_notification(
+            $firebaseResponse = send_user_push_notification(
+                $passenger,
                 'Driver Arrived',
-                'Captain has reached your pickup location.',
-                $passenger->device_token
+                'Captain has reached your pickup location.'
             );
         }
         return apiResponse($ride, 'Driver Reach in Your Loction!', 200, );
@@ -521,10 +530,10 @@ public function near_ride()
         $firebaseResponse = null;
         if (!empty($passenger) && !empty($passenger->device_token)) {
             try {
-                $firebaseResponse = send_firebase_notification(
+                $firebaseResponse = send_user_push_notification(
+                    $passenger,
                     'Ride Started',
-                    'Your Captain is on the way to pick you up.',
-                    $passenger->device_token
+                    'Your Captain is on the way to pick you up.'
                 );
             } catch (\Exception $e) {
                 \Log::error('Firebase Notification Error: ' . $e->getMessage());
@@ -546,10 +555,10 @@ public function near_ride()
         $firebaseResponse = null;
         if (!empty($passenger) && !empty($passenger->device_token)) {
             try {
-                $firebaseResponse = send_firebase_notification(
+                $firebaseResponse = send_user_push_notification(
+                    $passenger,
                     'Ride Pick',
-                    'Ride Started Have a safe journey with SheDrives.',
-                    $passenger->device_token
+                    'Ride Started Have a safe journey with SheDrives.'
                 );
             } catch (\Exception $e) {
                 \Log::error('Firebase Notification Error: ' . $e->getMessage());
@@ -579,11 +588,12 @@ public function near_ride()
     public function ridebydriver(Request $request)
     {
         $rides = Ride::whereIn('status', ['completed', 'canceled'])
-        ->where('driver_id', auth()->id()) 
-            ->with(['driver', 'user_pe', 'vehicles','ratings'])
+            ->where('driver_id', auth()->id())
+            ->with(['driver', 'user_pe', 'vehicles', 'ratings'])
+            ->orderByDesc('updated_at')
             ->get();
-    
-        return apiResponse($rides, 'All Rides.');
+
+        return apiResponse($rides, 'Ride history retrieved successfully.');
     }
     public function completeride(Request $request)
     {
@@ -645,10 +655,10 @@ public function near_ride()
     $passenger = \App\Models\User::find($ride->user_id);
     if (!empty($passenger) && !empty($passenger->device_token)) {
         try {
-            $firebaseResponse = send_firebase_notification(
+            $firebaseResponse = send_user_push_notification(
+                $passenger,
                 'Ride Completed',
-                'Your ride has been completed. Don’t forget to rate your captain!',
-                $passenger->device_token
+                'Your ride has been completed. Don’t forget to rate your captain!'
             );
         } catch (\Exception $e) {
             \Log::error('Firebase Notification Error (Passenger): ' . $e->getMessage());

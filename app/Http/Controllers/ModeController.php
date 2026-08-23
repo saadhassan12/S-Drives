@@ -6,63 +6,57 @@ use Illuminate\Http\Request;
 
 class ModeController extends Controller
 {
-    //
+    public function drivermood(Request $request)
+    {
+        $user = auth()->user();
 
-    public function passengermood()
-{
-    $user = auth()->user();
+        if (!$user) {
+            return response()->json([
+                'status' => false,
+                'message' => 'No authenticated user found.',
+            ], 404);
+        }
 
-    if ($user) {
-        $user->update([
-            'role' => 'passenger',
-            'last_login_at'=> 0,
-        ]);
-
-        $user->tokens()->update(['revoked' => true]);
-
-        $tokenResult = $user->createToken('authToken')->accessToken;
-
-        return response()->json([
-           'status' => 200, 
-            'message' => 'User role updated to passenger successfully',
-            'data'=> $user,
-            'token' => $tokenResult
-        ], 200);
-    }
-
-    return response()->json([
-        'status' => false,
-        'message' => 'No authenticated user found.',
-    ], 404);
-}
-
-
-   public function drivermood()
-{
-    $user = auth()->user();
-
-    if ($user) {
         $user->update([
             'role' => 'driver',
             'last_login_at' => 1,
         ]);
 
-        $user->tokens()->update(['revoked' => true]);
-
-        $tokenResult = $user->createToken('authToken')->accessToken;
+        $freshUser = $user->fresh();
 
         return response()->json([
             'status' => 200,
             'message' => 'User role updated to driver successfully.',
-            'data'=> $user,
-            'token' => $tokenResult
+            'data' => $freshUser,
+            'role' => $freshUser->role,
+            'token' => $request->bearerToken(),
         ], 200);
     }
 
-    return response()->json([
-        'status' => false,
-        'message' => 'No authenticated user found.',
-    ], 404);
-}
+    public function passengermood(Request $request)
+    {
+        $user = auth()->user();
 
+        if (!$user) {
+            return response()->json([
+                'status' => false,
+                'message' => 'No authenticated user found.',
+            ], 404);
+        }
+
+        $user->update([
+            'role' => 'passenger',
+            'last_login_at' => 0,
+        ]);
+
+        $freshUser = $user->fresh();
+
+        return response()->json([
+            'status' => 200,
+            'message' => 'User role updated to passenger successfully',
+            'data' => $freshUser,
+            'role' => $freshUser->role,
+            'token' => $request->bearerToken(),
+        ], 200);
+    }
 }

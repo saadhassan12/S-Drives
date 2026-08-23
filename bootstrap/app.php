@@ -5,6 +5,7 @@ use Illuminate\Foundation\Configuration\Exceptions;
 use Illuminate\Foundation\Configuration\Middleware;
 use App\Http\Middleware\AutoLogout;
 use App\Http\Middleware\ClearCache;
+use App\Http\Middleware\TouchLastSeen;
 
 return Application::configure(basePath: dirname(__DIR__))
     ->withRouting(
@@ -16,6 +17,7 @@ return Application::configure(basePath: dirname(__DIR__))
     ->withMiddleware(function (Middleware $middleware) {
         // Global middleware append
         $middleware->append(AutoLogout::class);
+        $middleware->append(TouchLastSeen::class);
 
         // Middleware aliases
         $middleware->alias([

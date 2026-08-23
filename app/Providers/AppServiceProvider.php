@@ -22,5 +22,6 @@ class AppServiceProvider extends ServiceProvider
     {
         Passport::tokensExpireIn(now()->addMonths(6));
         Passport::refreshTokensExpireIn(now()->addMonths(6));
+        Passport::personalAccessTokensExpireIn(now()->addMonths(6));
     }
 }

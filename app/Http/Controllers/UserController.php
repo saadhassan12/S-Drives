@@ -41,7 +41,7 @@ public function getOtp(Request $request)
         '+923022222222',
         '+923011111111',
         '+923047512743',
-	'+923400423649',
+	    '+923400423649',
 
     ];
 
@@ -151,25 +151,29 @@ public function getOtp(Request $request)
                 if ($user->trashed()) {
                     return apiResponse(null, 'Your account has been deleted. Please contact admin for assistance.', 403);
                 }
+
+                // Same number se naya login — purani session auto logout.
+                $user->tokens()->where('revoked', false)->update(['revoked' => true]);
+
+                DB::table('login_histories')
+                    ->where('user_id', $user->id)
+                    ->whereNull('logout_time')
+                    ->update(['logout_time' => now()]);
+
                 $token = $user->createToken('Api Token')->accessToken;
                 $user->device_token = $request->device_token ?? 'default_token';
+                $user->is_online = true;
                 $user->save();
-                  // ✅ Save login time
-                 
 
-                if ($user && $user->role == 'driver') {
-                    $user->update(['last_login_at' => 1]);
-                     DB::table('login_histories')->insert([
-                    'user_id' => $user->id,
-                    'login_time' => now(),
-                ]);
-                } else {
-                    $user->update(['last_login_at' => 0]);
+                if ((int) $user->last_login_at === 1 && $user->role === 'driver') {
+                    DB::table('login_histories')->insert([
+                        'user_id' => $user->id,
+                        'login_time' => now(),
+                    ]);
                 }
-                
 
                 return apiResponse(
-                    ['user' => $user, 'token' => $token],
+                    ['user' => $user->fresh(), 'token' => $token],
                     'OTP verified successfully.'
                 );
             } else {
@@ -272,10 +276,10 @@ public function getOtp(Request $request)
     $notificationSent = false;
     if (!empty($user->device_token)) {
         try {
-            send_firebase_notification(
+            send_user_push_notification(
+                $user,
                 'Profile Updated',
-                'Your profile has been updated successfully.',
-                $user->device_token
+                'Your profile has been updated successfully.'
             );
             $notificationSent = true;
         } catch (\Exception $e) {
@@ -319,6 +323,21 @@ public function getOtp(Request $request)
     return apiResponse(null, 'Permission denied. Only drivers can update their location.');
 }
 
+    public function updateAppState(Request $request)
+    {
+        $request->validate([
+            'in_foreground' => 'required|boolean',
+        ]);
+
+        $user = auth()->user();
+        $user->update([
+            'is_app_foreground' => $request->boolean('in_foreground'),
+            'last_seen_at' => now(),
+        ]);
+
+        return apiResponse($user->fresh(), 'App state updated successfully.');
+    }
+
     public function logout(Request $request)
     {
         $user = auth()->user();
@@ -332,8 +351,13 @@ public function getOtp(Request $request)
                 ->whereIn('status', ['accepted'])
                 ->update(['status' => 'canceled']);
 
-            // Update last login status to 0
-            $user->update(['last_login_at' => 0]);
+            // Stop ride notifications after logout and invalidate push target.
+            $user->update([
+                'last_login_at' => 0,
+                'device_token' => 'default_token',
+                'is_online' => false,
+                'is_app_foreground' => false,
+            ]);
             
             
                DB::table('login_histories')
@@ -355,8 +379,11 @@ public function getOtp(Request $request)
             return apiResponse(null, 'User not found.', 404);
         }
 
+        $freshUser = $user->fresh();
+        $freshUser->last_login_at = (int) $freshUser->last_login_at;
+
         return apiResponse(
-            $user,
+            $freshUser,
             'User details retrieved successfully.'
         );
     }
@@ -392,15 +419,14 @@ public function logoutUserById(): JsonResponse
     $loggedOutUsers = [];
 
     foreach ($users as $user) {
-        // Delete all Sanctum tokens for this user (force logout)
-        $deleted = $user->tokens()->delete();
-
-        // Optionally reset device_token
-        // $user->update(['device_token' => null]);
+        $user->tokens()->where('revoked', false)->update(['revoked' => true]);
+        $user->update([
+            'last_login_at' => 0,
+            'device_token' => 'default_token',
+        ]);
 
         $loggedOutUsers[] = [
             'user_id' => $user->id,
-            'deleted_tokens' => $deleted
         ];
     }
 

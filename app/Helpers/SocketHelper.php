@@ -1,5 +1,6 @@
 <?php
 
+use App\Models\Ride;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
@@ -70,11 +71,11 @@ if (!function_exists('notify_users_socket')) {
 }
 
 /**
- * Mark a ride as visible to specific drivers for a short window (default 30 seconds).
+ * Mark a ride as visible to specific drivers for a short window (default 60 seconds).
  * After the window expires, near_ride() stops returning it until re-marked (new ride / fare update).
  */
 if (!function_exists('mark_ride_visible_for_drivers')) {
-    function mark_ride_visible_for_drivers(array $driverIds, int $rideId, int $seconds = 30): void
+    function mark_ride_visible_for_drivers(array $driverIds, int $rideId, int $seconds = 60): void
     {
         foreach ($driverIds as $driverId) {
             Cache::put(
@@ -103,8 +104,14 @@ if (!function_exists('is_ride_visible_for_driver')) {
 if (!function_exists('notify_drivers_new_ride')) {
     function notify_drivers_new_ride(array $driverIds, array $rideData): bool
     {
+        $driverIds = filter_active_driver_ids($driverIds);
+
+        if (empty($driverIds)) {
+            return false;
+        }
+
         if (!empty($rideData['ride_id'])) {
-            mark_ride_visible_for_drivers($driverIds, (int) $rideData['ride_id'], 30);
+            mark_ride_visible_for_drivers($driverIds, (int) $rideData['ride_id'], ride_visibility_seconds());
         }
 
         // Broadcast event AND auto-refresh all online drivers' nearby rides list
@@ -160,6 +167,45 @@ if (!function_exists('notify_passenger_ride_update')) {
  * @param array $bidData Bid information
  * @return bool Success status
  */
+if (!function_exists('ride_visibility_seconds')) {
+    function ride_visibility_seconds(): int
+    {
+        return max(10, (int) config('ride.visibility_seconds', 60));
+    }
+}
+
+/**
+ * Restart the ride visibility window when a driver sends/updates a bid.
+ */
+if (!function_exists('reset_ride_visibility_after_bid')) {
+    function reset_ride_visibility_after_bid(Ride $ride): void
+    {
+        $seconds = ride_visibility_seconds();
+
+        $ride->touch();
+
+        if ($ride->vehicle_category_id) {
+            $drivers = find_nearby_drivers_for_ride(
+                (float) $ride->start_latitude,
+                (float) $ride->start_longitude,
+                [(int) $ride->vehicle_category_id]
+            );
+
+            $driverIds = $drivers->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+            if (!empty($driverIds)) {
+                mark_ride_visible_for_drivers($driverIds, (int) $ride->id, $seconds);
+            }
+        }
+
+        refresh_all_drivers_list('bid_placed', [
+            'ride_id' => $ride->id,
+            'visibility_seconds' => $seconds,
+            'visibility_reset' => true,
+        ]);
+    }
+}
+
 if (!function_exists('notify_bid_update')) {
     function notify_bid_update(int $userId, array $bidData): bool
     {

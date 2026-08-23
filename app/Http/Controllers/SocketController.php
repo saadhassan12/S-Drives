@@ -29,6 +29,7 @@ class SocketController extends Controller
             'first_name' => $user->first_name,
             'last_name' => $user->last_name,
             'role' => $user->role,
+            'last_login_at' => (int) $user->last_login_at,
             'room_ids' => $roomIds,
             'socket_url' => $socketClientBase !== '' ? rtrim((string) $socketClientBase, '/') : null,
         ], 'Socket auth successful.');
@@ -41,14 +42,37 @@ class SocketController extends Controller
         $data = $request->validate([
             'user_id' => 'required|integer|exists:users,id',
             'is_online' => 'required|boolean',
+            'is_app_foreground' => 'sometimes|boolean',
         ]);
 
         /** @var User $user */
         $user = User::findOrFail($data['user_id']);
-        $user->forceFill([
+
+        $updates = [
             'is_online' => $data['is_online'],
             'last_seen_at' => now(),
-        ])->save();
+        ];
+
+        if (array_key_exists('is_app_foreground', $data)) {
+            $updates['is_app_foreground'] = $data['is_app_foreground'];
+        } elseif (!$data['is_online']) {
+            $updates['is_app_foreground'] = false;
+        }
+
+        $user->forceFill($updates)->save();
+
+        return response()->json(['ok' => true]);
+    }
+
+    public function touchActivity(Request $request)
+    {
+        $this->assertSecret($request);
+
+        $data = $request->validate([
+            'user_id' => 'required|integer|exists:users,id',
+        ]);
+
+        User::where('id', $data['user_id'])->update(['last_seen_at' => now()]);
 
         return response()->json(['ok' => true]);
     }

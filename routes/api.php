@@ -28,6 +28,7 @@ Route::controller(UserController::class)->middleware(['auth:api', AutoLogout::cl
     Route::get('/user',  'details');
     Route::post('/profile-update',  'profileUpdate')->name('profile.update');
     Route::post('/location-update',  'locationUpdate');
+    Route::post('/app-state', 'updateAppState')->name('app.state');
     Route::post('/logout', 'logout')->name('logout');
     Route::post('delete-user', 'deleteUser')->name('user.delete');
     Route::get('/booking/cancel',  'cancelBooking')->name('booking.cancel');
@@ -41,11 +42,14 @@ Route::controller(SocketController::class)->middleware(['auth:api'])->group(func
 
 Route::controller(SocketController::class)->group(function () {
     Route::post('/socket/internal/presence', 'updatePresence');
+    Route::post('/socket/internal/activity', 'touchActivity');
 });
-// passenger
+// passenger / driver mode
 Route::controller(ModeController::class)->middleware(['auth:api', AutoLogout::class])->group(function () {
-    Route::get('/passenger-mode',  'passengermood')->name('passenger.mood');
-    Route::get('/driver-mode',  'drivermood')->name('driver.mood');
+    Route::get('/passenger-mode', 'passengermood')->name('passenger.mood');
+    Route::post('/passenger-mode', 'passengermood');
+    Route::get('/driver-mode', 'drivermood')->name('driver.mood');
+    Route::post('/driver-mode', 'drivermood');
 });
 //driver
 Route::controller(DriverController::class)
@@ -81,6 +85,8 @@ Route::controller(AddressController::class)->middleware(['auth:api', AutoLogout:
 });
 //rides 
 Route::controller(RidesController::class)->middleware(['auth:api', AutoLogout::class, 'clearcache'])->group(function () {
+
+    Route::get('/ride/get/by/user', 'getbyuser');
 
     Route::prefix('rides')->group(function () {
         Route::post('/create', 'createBooking')->name('rides.create');

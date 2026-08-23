@@ -38,6 +38,7 @@ class User extends Authenticatable
         'last_login_at',
         'device_token',
         'is_online',
+        'is_app_foreground',
         'last_seen_at',
     ];
 
@@ -49,6 +50,7 @@ class User extends Authenticatable
     protected $hidden = [
         'password',
         'remember_token',
+        'active_mode',
     ];
 
     /**
@@ -62,6 +64,7 @@ class User extends Authenticatable
             'email_verified_at' => 'datetime',
             'password' => 'hashed',
             'is_online' => 'boolean',
+            'is_app_foreground' => 'boolean',
             'last_seen_at' => 'datetime',
         ];
     }

@@ -9,6 +9,8 @@ use App\Models\User;
 use App\Services\SocketNotifier;
 use Illuminate\Http\Exceptions\HttpResponseException;
 use Illuminate\Http\Request;
+use Illuminate\Http\UploadedFile;
+use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 
 class ChatController extends Controller
@@ -27,7 +29,7 @@ class ChatController extends Controller
                 'passenger:id,first_name,last_name,profile_picture,is_online,last_seen_at',
                 'driver:id,first_name,last_name,profile_picture,is_online,last_seen_at',
                 'messages' => function ($query) {
-                    $query->select('id', 'chat_room_id', 'sender_id', 'message', 'image_url', 'created_at')
+                    $query->select('id', 'chat_room_id', 'sender_id', 'message_type', 'message', 'image_url', 'created_at')
                         ->latest()
                         ->limit(1);
                 },
@@ -82,8 +84,18 @@ class ChatController extends Controller
             'message_type' => 'nullable|in:text,image',
             'message' => 'nullable|string|max:5000',
             'image_url' => 'nullable|string|max:2048',
+            'image' => 'nullable',
+            'photo' => 'nullable|image|mimes:jpg,jpeg,png,webp,gif|max:' . config('upload.max_image_kb'),
+            'file' => 'nullable|image|mimes:jpg,jpeg,png,webp,gif|max:' . config('upload.max_image_kb'),
+            'image_base64' => 'nullable|string',
             'meta' => 'nullable|array',
         ]);
+
+        if ($request->hasFile('image')) {
+            $request->validate([
+                'image' => 'image|mimes:jpg,jpeg,png,webp,gif|max:' . config('upload.max_image_kb'),
+            ]);
+        }
 
         if ($request->filled('room_id') && $request->filled('ride_id')) {
             return apiResponse(null, 'Send either room_id or ride_id, not both.', 422, false);
@@ -103,14 +115,32 @@ class ChatController extends Controller
 
         $messageType = (string) ($request->input('message_type') ?? 'text');
         $text = trim((string) $request->input('message', ''));
-        $imageUrl = $request->input('image_url');
+        $imageUrl = $request->input('image_url') ?: $request->input('image');
+
+        $uploadedFile = $request->file('image')
+            ?? $request->file('photo')
+            ?? $request->file('file');
+
+        if ($uploadedFile instanceof UploadedFile) {
+            $imageUrl = $this->storeChatImage($uploadedFile);
+            $messageType = 'image';
+        } elseif ($request->filled('image_base64')) {
+            $imageUrl = $this->storeChatImageFromBase64((string) $request->input('image_base64'));
+            $messageType = 'image';
+        } elseif (is_string($imageUrl) && filter_var($imageUrl, FILTER_VALIDATE_URL)) {
+            $messageType = 'image';
+        } elseif ($messageType === 'image' && is_string($imageUrl) && $imageUrl !== '') {
+            $messageType = 'image';
+        } else {
+            $imageUrl = null;
+        }
 
         if ($messageType === 'text' && $text === '') {
             return apiResponse(null, 'Text message cannot be empty.', 422, false);
         }
 
         if ($messageType === 'image' && empty($imageUrl)) {
-            return apiResponse(null, 'Image URL is required for image messages.', 422, false);
+            return apiResponse(null, 'Image is required for image messages.', 422, false);
         }
 
         $message = ChatMessage::create([
@@ -131,16 +161,27 @@ class ChatController extends Controller
 
     public function uploadImage(Request $request)
     {
+        $file = $request->file('image')
+            ?? $request->file('photo')
+            ?? $request->file('file');
+
+        if (! $file instanceof UploadedFile) {
+            return apiResponse(null, 'Image file is required (use image, photo, or file field).', 422, false);
+        }
+
         $request->validate([
-            'image' => 'required|image|mimes:jpg,jpeg,png,webp|max:' . config('upload.max_image_kb'),
+            'image' => 'nullable|image|mimes:jpg,jpeg,png,webp,gif|max:' . config('upload.max_image_kb'),
+            'photo' => 'nullable|image|mimes:jpg,jpeg,png,webp,gif|max:' . config('upload.max_image_kb'),
+            'file' => 'nullable|image|mimes:jpg,jpeg,png,webp,gif|max:' . config('upload.max_image_kb'),
         ]);
 
-        $path = $request->file('image')->store('chat-images', 'public');
-        $url = asset('storage/' . $path);
+        $path = $file->store('chat-images', 'public');
+        $url = Storage::disk('public')->url($path);
 
         return apiResponse([
             'path' => $path,
             'url' => $url,
+            'image_url' => $url,
         ], 'Image uploaded successfully.');
     }
 
@@ -300,6 +341,38 @@ class ChatController extends Controller
         if ($body === '') {
             $body = $senderName.' sent a message.';
         }
-        send_firebase_notification('New message', $body, $recipient->device_token);
+        send_user_push_notification($recipient, 'New message', $body);
+    }
+
+    protected function storeChatImage(UploadedFile $file): string
+    {
+        $path = $file->store('chat-images', 'public');
+
+        return Storage::disk('public')->url($path);
+    }
+
+    protected function storeChatImageFromBase64(string $base64): string
+    {
+        $extension = 'jpg';
+
+        if (preg_match('/^data:image\/(\w+);base64,/', $base64, $matches)) {
+            $extension = strtolower($matches[1]);
+            $base64 = substr($base64, strpos($base64, ',') + 1);
+        }
+
+        $binary = base64_decode($base64, true);
+        if ($binary === false) {
+            throw new HttpResponseException(response()->json([
+                'status' => 422,
+                'success' => false,
+                'message' => 'Invalid image data.',
+                'data' => null,
+            ], 422));
+        }
+
+        $path = 'chat-images/' . Str::random(40) . '.' . $extension;
+        Storage::disk('public')->put($path, $binary);
+
+        return Storage::disk('public')->url($path);
     }
 }
