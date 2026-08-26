@@ -131,6 +131,73 @@ if (!function_exists('find_drivers_for_fare_update')) {
     }
 }
 
+if (!function_exists('notify_drivers_fare_updated')) {
+    /**
+     * Re-show a ride to eligible drivers after the passenger increases fare.
+     */
+    function notify_drivers_fare_updated(Ride $ride, $fareAmount): void
+    {
+        $fareAmount = is_numeric($fareAmount) ? round((float) $fareAmount) : $fareAmount;
+
+        $ride->final_fare = $fareAmount;
+        $ride->estimated_fare = $fareAmount;
+        $ride->touch();
+        $ride->save();
+
+        $seconds = ride_visibility_seconds();
+        $radiusKm = driver_ride_radius_km();
+        $drivers = find_drivers_for_fare_update($ride, $radiusKm);
+        $allDriverIds = $drivers->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+        remember_ride_notified_drivers((int) $ride->id, $allDriverIds);
+
+        if (!empty($allDriverIds)) {
+            mark_ride_visible_for_drivers($allDriverIds, (int) $ride->id, $seconds);
+        }
+
+        foreach ($drivers as $driver) {
+            send_driver_ride_notification(
+                $driver,
+                'Fare Updated',
+                'Ride fare has been updated to ' . $fareAmount
+            );
+        }
+
+        $ridePayload = [
+            'ride_id' => $ride->id,
+            'final_fare' => $ride->final_fare,
+            'estimated_fare' => $ride->estimated_fare,
+            'fare_updated' => true,
+            'start' => $ride->start,
+            'destination' => $ride->destination,
+            'vehicle_category_id' => $ride->vehicle_category_id,
+            'status' => $ride->status,
+            'max_radius_km' => $radiusKm,
+        ];
+
+        $socketDriverIds = get_online_driver_ids_for_socket($allDriverIds);
+        if (!empty($socketDriverIds)) {
+            broadcast_socket_event('driver:new-ride-available', [
+                'ride' => $ridePayload,
+                'message' => 'Updated fare ride available nearby',
+                'ride_id' => (int) $ride->id,
+                'visibility_seconds' => $seconds,
+                'visibility_reset' => true,
+                'reason' => 'fare_updated',
+            ], $socketDriverIds, false);
+        }
+
+        refresh_all_drivers_list('fare_updated', [
+            'ride_id' => $ride->id,
+            'visibility_seconds' => $seconds,
+            'visibility_reset' => true,
+            'final_fare' => $ride->final_fare,
+            'estimated_fare' => $ride->estimated_fare,
+            'fare_updated' => true,
+        ]);
+    }
+}
+
 if (!function_exists('find_nearby_drivers_for_ride')) {
     /**
      * Active drivers within configured radius who can receive ride notifications.

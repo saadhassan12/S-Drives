@@ -104,15 +104,21 @@ if (!function_exists('is_ride_visible_for_driver')) {
 if (!function_exists('notify_drivers_new_ride')) {
     function notify_drivers_new_ride(array $driverIds, array $rideData, bool $resetVisibility = false): bool
     {
-        $driverIds = filter_active_driver_ids($driverIds);
+        $driverIds = array_values(array_unique(array_map('intval', $driverIds)));
 
         if (empty($driverIds)) {
             return false;
         }
 
         if (!empty($rideData['ride_id'])) {
-            mark_ride_visible_for_drivers($driverIds, (int) $rideData['ride_id'], ride_visibility_seconds());
             remember_ride_notified_drivers((int) $rideData['ride_id'], $driverIds);
+            mark_ride_visible_for_drivers($driverIds, (int) $rideData['ride_id'], ride_visibility_seconds());
+        }
+
+        $socketDriverIds = get_online_driver_ids_for_socket($driverIds);
+
+        if (empty($socketDriverIds)) {
+            return false;
         }
 
         $eventData = [
@@ -127,8 +133,7 @@ if (!function_exists('notify_drivers_new_ride')) {
             $eventData['reason'] = !empty($rideData['fare_updated']) ? 'fare_updated' : 'ride_updated';
         }
 
-        // Broadcast event AND auto-refresh all online drivers' nearby rides list
-        return broadcast_socket_event('driver:new-ride-available', $eventData, $driverIds, true);
+        return broadcast_socket_event('driver:new-ride-available', $eventData, $socketDriverIds, true);
     }
 }
 
@@ -142,12 +147,22 @@ if (!function_exists('notify_drivers_new_ride')) {
 if (!function_exists('refresh_all_drivers_list')) {
     function refresh_all_drivers_list(string $action, array $rideData = []): bool
     {
-        // Broadcast to ALL online drivers with refresh flag
-        return broadcast_socket_event('driver:rides-list-updated', [
+        $payload = [
             'action' => $action,
             'ride' => $rideData,
             'message' => "Rides list updated: {$action}",
-        ], null, true); // null = all users, true = refresh_drivers
+        ];
+
+        if (!empty($rideData['visibility_reset'])) {
+            $payload['ride_id'] = $rideData['ride_id'] ?? null;
+            $payload['visibility_seconds'] = $rideData['visibility_seconds'] ?? ride_visibility_seconds();
+            $payload['visibility_reset'] = true;
+            $payload['reason'] = !empty($rideData['fare_updated'])
+                ? 'fare_updated'
+                : ($action === 'bid_placed' ? 'bid_placed' : 'ride_updated');
+        }
+
+        return broadcast_socket_event('driver:rides-list-updated', $payload, null, true);
     }
 }
 

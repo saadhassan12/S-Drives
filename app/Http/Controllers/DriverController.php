@@ -438,13 +438,17 @@ public function near_ride()
 
             return $ride;
         })
-        ->filter(function ($ride) use ($radiusKm) {
+        ->filter(function ($ride) use ($radiusKm, $user) {
             if ($ride->driver_distance_km > $radiusKm) {
                 return false;
             }
 
-            // Show only for configured seconds after ride create / fare update / bid
-            return $ride->updated_at && $ride->updated_at->gte(now()->subSeconds(ride_visibility_seconds()));
+            // Show for configured window after create / fare update / bid, or per-driver cache reset
+            $visibleByTime = $ride->updated_at
+                && $ride->updated_at->gte(now()->subSeconds(ride_visibility_seconds()));
+            $visibleByCache = is_ride_visible_for_driver((int) $user->id, (int) $ride->id);
+
+            return $visibleByTime || $visibleByCache;
         })
         ->values();
 

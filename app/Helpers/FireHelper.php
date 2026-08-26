@@ -91,6 +91,26 @@ if (!function_exists('filter_active_driver_ids')) {
     }
 }
 
+if (!function_exists('get_online_driver_ids_for_socket')) {
+    /**
+     * Drivers eligible for realtime socket events (driver mode on; token not required).
+     */
+    function get_online_driver_ids_for_socket(array $driverIds): array
+    {
+        if (empty($driverIds)) {
+            return [];
+        }
+
+        return User::query()
+            ->whereIn('id', $driverIds)
+            ->where('role', 'driver')
+            ->where('last_login_at', 1)
+            ->pluck('id')
+            ->map(fn ($id) => (int) $id)
+            ->all();
+    }
+}
+
 if (!function_exists('nearby_active_driver_query')) {
     function nearby_active_driver_query()
     {

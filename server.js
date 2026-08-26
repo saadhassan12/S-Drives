@@ -28,6 +28,32 @@
   const SOCKET_PORT = Number(process.env.SOCKET_PORT || 6001);
   const LARAVEL_API_URL = resolveLaravelApiBase();
   const SOCKET_INTERNAL_SECRET = process.env.SOCKET_INTERNAL_SECRET || "";
+  const RIDE_VISIBILITY_MS = Math.max(
+    10000,
+    Number(process.env.RIDE_VISIBILITY_SECONDS || 60) * 1000
+  );
+
+  function getVisibilityResetPayload(data) {
+    if (!data) return null;
+
+    if (data.visibility_reset) {
+      return {
+        ride_id: data.ride_id,
+        visibility_seconds: data.visibility_seconds || RIDE_VISIBILITY_MS / 1000,
+        reason: data.reason || "ride_updated",
+      };
+    }
+
+    if (data.ride && data.ride.visibility_reset) {
+      return {
+        ride_id: data.ride.ride_id,
+        visibility_seconds: data.ride.visibility_seconds || RIDE_VISIBILITY_MS / 1000,
+        reason: data.ride.fare_updated ? "fare_updated" : "ride_updated",
+      };
+    }
+
+    return null;
+  }
   const SOCKET_CORS_ORIGIN = process.env.SOCKET_CORS_ORIGIN || "*";
   const fetchFn = (...args) => {
     if (typeof fetch !== "undefined") {
@@ -269,7 +295,7 @@
     // Store driver status for future updates
     let isDriver = false;
 
-    const RIDE_VISIBILITY_MS = 60000;
+    const RIDE_VISIBILITY_MS_LOCAL = RIDE_VISIBILITY_MS;
     let rideHideTimer = null;
 
     const scheduleRideHideIfNeeded = (count, source = "unknown") => {
@@ -281,7 +307,7 @@
       if (count > 0) {
         console.log(
           "[socket] ⏱ Scheduling ride hide in %ds for driver user_id=%s (source=%s)",
-          RIDE_VISIBILITY_MS / 1000,
+          RIDE_VISIBILITY_MS_LOCAL / 1000,
           userId,
           source
         );
@@ -289,7 +315,7 @@
         rideHideTimer = setTimeout(() => {
           console.log(
             "[socket] 🙈 Auto-hiding rides after %ds for driver user_id=%s",
-            RIDE_VISIBILITY_MS / 1000,
+            RIDE_VISIBILITY_MS_LOCAL / 1000,
             userId
           );
           socket.emit("driver:nearby-rides:list", {
@@ -301,15 +327,40 @@
             reason: "visibility_timeout",
           });
           rideHideTimer = null;
-        }, RIDE_VISIBILITY_MS);
+        }, RIDE_VISIBILITY_MS_LOCAL);
       }
     };
 
     const emitNearbyRidesWithAutoHide = (responseData, source = "unknown") => {
-      socket.emit("driver:nearby-rides:list", responseData);
       const count = responseData?.count ?? responseData?.data?.length ?? 0;
+      const payload = {
+        ...responseData,
+        hidden: count > 0 ? false : !!responseData?.hidden,
+        reason: count > 0 ? "visible" : responseData?.reason,
+      };
+
+      socket.emit("driver:nearby-rides:list", payload);
       scheduleRideHideIfNeeded(count, source);
     };
+
+    const resetRideVisibilityForDriver = (payload, source = "unknown") => {
+      if (!payload) return;
+
+      if (rideHideTimer) {
+        clearTimeout(rideHideTimer);
+        rideHideTimer = null;
+      }
+
+      socket.emit("driver:ride-visibility-reset", payload);
+      console.log(
+        "[socket] 🔁 Visibility reset for driver user_id=%s ride_id=%s (source=%s)",
+        userId,
+        payload.ride_id,
+        source
+      );
+    };
+
+    socket.data.resetRideVisibilityForDriver = resetRideVisibilityForDriver;
 
     // Helper function to refresh nearby rides for this driver
     const refreshNearbyRides = async () => {
@@ -1245,12 +1296,13 @@
           const sockets = await io.fetchSockets();
           for (const sock of sockets) {
             if (sock.data.isDriver && sock.data.refreshNearbyRides) {
-              if (data && data.visibility_reset) {
-                sock.emit("driver:ride-visibility-reset", {
-                  ride_id: data.ride_id,
-                  visibility_seconds: data.visibility_seconds || 60,
-                  reason: data.reason || "bid_placed",
-                });
+              const visibilityReset = getVisibilityResetPayload(data);
+              if (visibilityReset) {
+                if (typeof sock.data.resetRideVisibilityForDriver === "function") {
+                  sock.data.resetRideVisibilityForDriver(visibilityReset, event);
+                } else {
+                  sock.emit("driver:ride-visibility-reset", visibilityReset);
+                }
               }
               await sock.data.refreshNearbyRides();
               driverRefreshCount++;
@@ -1282,12 +1334,13 @@
           const sockets = await io.fetchSockets();
           for (const sock of sockets) {
             if (sock.data.isDriver && sock.data.refreshNearbyRides) {
-              if (data && data.visibility_reset) {
-                sock.emit("driver:ride-visibility-reset", {
-                  ride_id: data.ride_id,
-                  visibility_seconds: data.visibility_seconds || 60,
-                  reason: data.reason || "bid_placed",
-                });
+              const visibilityReset = getVisibilityResetPayload(data);
+              if (visibilityReset) {
+                if (typeof sock.data.resetRideVisibilityForDriver === "function") {
+                  sock.data.resetRideVisibilityForDriver(visibilityReset, event);
+                } else {
+                  sock.emit("driver:ride-visibility-reset", visibilityReset);
+                }
               }
               await sock.data.refreshNearbyRides();
               driverRefreshCount++;

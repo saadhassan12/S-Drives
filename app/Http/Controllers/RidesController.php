@@ -201,22 +201,25 @@ public function updateBooking(Request $request, $id)
 
     }
 
+    $wasAlreadyActive = $ride->status === 'in_progress';
+
     // ? Save ride updates
     $ride->vehicle_category_id = $vehicleCategory->id;
     $ride->status = 'in_progress';
     $ride->estimated_fare = round($fare);
     $ride->save();
 
-    // ? Compatible vehicle categories
-    $compatibleCategories = [
-        1 => [1, 2],
-        2 => [1, 2],
-        4 => [4, 5],
-        5 => [5],
-    ];
+    if ($wasAlreadyActive) {
+        notify_drivers_fare_updated($ride, $ride->estimated_fare);
 
-    $categoryIds = $compatibleCategories[$vehicleCategory->id] ?? [$vehicleCategory->id];
+        return apiResponse(
+            $ride,
+            'Fare updated successfully, ride re-sent to nearby drivers.',
+            200
+        );
+    }
 
+    $categoryIds = compatible_vehicle_category_ids((int) $vehicleCategory->id);
     $radiusKm = driver_ride_radius_km();
     $drivers = find_nearby_drivers_for_ride(
         (float) $ride->start_latitude,
@@ -225,7 +228,6 @@ public function updateBooking(Request $request, $id)
         $radiusKm
     );
 
-    // ? Send Firebase notifications
     foreach ($drivers as $driver) {
         send_driver_ride_notification(
             $driver,
@@ -234,7 +236,6 @@ public function updateBooking(Request $request, $id)
         );
     }
 
-    // 🚀 REAL-TIME: Broadcast to nearby drivers via socket
     $driverIds = $drivers->pluck('id')->toArray();
     if (!empty($driverIds)) {
         notify_drivers_new_ride($driverIds, [
@@ -254,7 +255,7 @@ public function updateBooking(Request $request, $id)
         ]);
     }
 
-    return apiResponse( $ride,'Vehicle category and fare updated successfully, notifications sent to nearby drivers');
+    return apiResponse($ride, 'Vehicle category and fare updated successfully, notifications sent to nearby drivers');
 }
 
 
@@ -356,50 +357,21 @@ $ride->save();
 
 public function updateBidAmount(Request $request, $ride_id)
 {
-   $amountChanges = $request->final_fare;
+    $amountChanges = $request->final_fare;
     $ride = Ride::find($ride_id);
-    
-if ($ride) {
-    
-    $ride->final_fare = $amountChanges;
-    $ride->touch();
-    $ride->save();
-    $firebaseResponse = null;
 
-    $radiusKm = driver_ride_radius_km();
-    $drivers = find_drivers_for_fare_update($ride, $radiusKm);
-
-      foreach ($drivers as $driver) {
-        send_driver_ride_notification(
-            $driver,
-            'Fare Updated',
-            'Ride Fare has been updated to ' . $amountChanges
-        );
+    if (!$ride) {
+        return apiResponse(null, 'Ride not found', 404);
     }
 
-    // 🚀 REAL-TIME: Notify nearby drivers via socket
-    $driverIds = $drivers->pluck('id')->toArray();
-    if (!empty($driverIds)) {
-        notify_drivers_new_ride($driverIds, [
-            'ride_id' => $ride->id,
-            'final_fare' => $ride->final_fare,
-            'estimated_fare' => $ride->estimated_fare,
-            'fare_updated' => true,
-            'start' => $ride->start,
-            'destination' => $ride->destination,
-            'max_radius_km' => $radiusKm,
-        ], true);
-    }
+    notify_drivers_fare_updated($ride, $amountChanges);
+
+    return apiResponse(
+        $ride->fresh(),
+        'Ride fare updated successfully and nearby drivers notified!',
+        200
+    );
 }
-
-
-return apiResponse(
-    $ride,
-    'Ride final fare updated successfully & nearby drivers notified!',
-    200,
-  
- 
-);}
 
 
     
