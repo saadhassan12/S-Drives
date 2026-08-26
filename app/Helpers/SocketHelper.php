@@ -157,6 +157,9 @@ if (!function_exists('refresh_all_drivers_list')) {
             $payload['ride_id'] = $rideData['ride_id'] ?? null;
             $payload['visibility_seconds'] = $rideData['visibility_seconds'] ?? ride_visibility_seconds();
             $payload['visibility_reset'] = true;
+            $payload['fare_updated'] = !empty($rideData['fare_updated']);
+            $payload['eligible_driver_ids'] = $rideData['eligible_driver_ids'] ?? [];
+            $payload['ride_details'] = $rideData['ride_details'] ?? null;
             $payload['reason'] = !empty($rideData['fare_updated'])
                 ? 'fare_updated'
                 : ($action === 'bid_placed' ? 'bid_placed' : 'ride_updated');

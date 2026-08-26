@@ -88,6 +88,130 @@
     return list;
   }
 
+  function getEligibleDriverIdsFromBroadcast(data) {
+    if (!data) return [];
+
+    if (Array.isArray(data.eligible_driver_ids) && data.eligible_driver_ids.length > 0) {
+      return data.eligible_driver_ids.map((id) => Number(id)).filter((id) => !Number.isNaN(id));
+    }
+
+    if (data.ride && Array.isArray(data.ride.eligible_driver_ids) && data.ride.eligible_driver_ids.length > 0) {
+      return data.ride.eligible_driver_ids.map((id) => Number(id)).filter((id) => !Number.isNaN(id));
+    }
+
+    return [];
+  }
+
+  async function deliverFareUpdatedRidesToEligibleDrivers(data, sourceEvent = "fare_updated") {
+    const eligibleIds = getEligibleDriverIdsFromBroadcast(data);
+    const forcedRides = getForcedRidesFromBroadcast(data);
+
+    if (eligibleIds.length === 0 || forcedRides.length === 0) {
+      return 0;
+    }
+
+    const visibilityReset = getVisibilityResetPayload(data);
+    const sockets = await io.fetchSockets();
+    let deliveredCount = 0;
+
+    for (const driverId of eligibleIds) {
+      const onlineCount = getUserOnlineCount(driverId);
+      if (onlineCount <= 0) {
+        console.log("[socket] ⚠ fare update skip offline driver user_id=%s", driverId);
+        continue;
+      }
+
+      if (visibilityReset) {
+        io.to(`user:${driverId}`).emit("driver:ride-visibility-reset", visibilityReset);
+      }
+
+      let refreshedViaSocket = false;
+      for (const sock of sockets) {
+        const meta = socketMeta.get(sock.id);
+        if (!meta || Number(meta.userId) !== Number(driverId)) {
+          continue;
+        }
+
+        if (typeof sock.data.resetRideVisibilityForDriver === "function" && visibilityReset) {
+          sock.data.resetRideVisibilityForDriver(visibilityReset, sourceEvent);
+        }
+
+        if (typeof sock.data.refreshNearbyRides === "function") {
+          await sock.data.refreshNearbyRides({
+            forceRides: forcedRides,
+            fareUpdated: true,
+            source: "fare_updated_direct",
+          });
+          refreshedViaSocket = true;
+        }
+      }
+
+      if (!refreshedViaSocket) {
+        io.to(`user:${driverId}`).emit("driver:nearby-rides:list", {
+          success: true,
+          data: forcedRides,
+          count: forcedRides.length,
+          timestamp: new Date().toISOString(),
+          fare_updated: true,
+          hidden: false,
+          reason: "fare_updated",
+        });
+      }
+
+      deliveredCount++;
+      console.log(
+        "[socket] ✓ fare update delivered to driver user_id=%s rides=%d refreshed=%s",
+        driverId,
+        forcedRides.length,
+        refreshedViaSocket ? "yes" : "emit-only"
+      );
+    }
+
+    return deliveredCount;
+  }
+
+  async function refreshConnectedDriverSockets(data, event) {
+    const visibilityReset = getVisibilityResetPayload(data);
+    const forcedRides = getForcedRidesFromBroadcast(data);
+    const fareUpdated = !!(data && (data.fare_updated || data.reason === "fare_updated" || forcedRides.length > 0));
+    const eligibleIds = getEligibleDriverIdsFromBroadcast(data);
+    let driverRefreshCount = 0;
+
+    if (fareUpdated && eligibleIds.length > 0 && forcedRides.length > 0) {
+      driverRefreshCount = await deliverFareUpdatedRidesToEligibleDrivers(data, event);
+      console.log("[socket] ✓ Fare update delivered to %d eligible online drivers", driverRefreshCount);
+      return driverRefreshCount;
+    }
+
+    const sockets = await io.fetchSockets();
+    for (const sock of sockets) {
+      const meta = socketMeta.get(sock.id);
+      const driverId = meta ? Number(meta.userId) : null;
+      const isEligible = eligibleIds.length === 0 || (driverId && eligibleIds.includes(driverId));
+
+      if (!sock.data.isDriver || !sock.data.refreshNearbyRides || !isEligible) {
+        continue;
+      }
+
+      if (visibilityReset) {
+        if (typeof sock.data.resetRideVisibilityForDriver === "function") {
+          sock.data.resetRideVisibilityForDriver(visibilityReset, event);
+        } else {
+          sock.emit("driver:ride-visibility-reset", visibilityReset);
+        }
+      }
+
+      await sock.data.refreshNearbyRides({
+        forceRides: forcedRides,
+        fareUpdated,
+        source: fareUpdated ? "fare_updated" : event,
+      });
+      driverRefreshCount++;
+    }
+
+    return driverRefreshCount;
+  }
+
   function getVisibilityResetPayload(data) {
     if (!data) return null;
 
@@ -320,12 +444,19 @@
   io.on("connection", async (socket) => {
     const { id: userId, room_ids: roomIds = [] } = socket.data.user;
     const token = socket.data.token;
+    const inDriverMode =
+      socket.data.user &&
+      socket.data.user.role === "driver" &&
+      Number(socket.data.user.last_login_at) === 1;
+
+    socket.data.userId = userId;
 
     console.log(
-      "[socket] connected user_id=%s sid=%s transport=%s",
+      "[socket] connected user_id=%s sid=%s transport=%s driver_mode=%s",
       userId,
       socket.id,
-      socket.conn?.transport?.name || "?"
+      socket.conn?.transport?.name || "?",
+      inDriverMode ? "yes" : "no"
     );
 
     if (!userSockets.has(userId)) {
@@ -346,9 +477,11 @@
       room_ids: roomIds,
     });
 
-    // 🚀 AUTO-FETCH: Send nearby rides immediately after connection (for drivers)
-    // Store driver status for future updates
-    let isDriver = false;
+    // Driver UI is based on role + driver mode flag from auth payload.
+    let isDriver = inDriverMode;
+    if (isDriver) {
+      socket.data.isDriver = true;
+    }
 
     const RIDE_VISIBILITY_MS_LOCAL = RIDE_VISIBILITY_MS;
     let rideHideTimer = null;
@@ -471,19 +604,28 @@
     
     (async () => {
       try {
+        if (isDriver) {
+          console.log("[socket] ✓ Driver connected - auto-fetching nearby rides for user_id=%s", userId);
+          await refreshNearbyRides();
+          return;
+        }
+
         const userData = await laravelFetch("/api/socket/me", {
           method: "GET",
           headers: {
             Authorization: `Bearer ${token}`,
           },
         });
-        
-        // Driver UI is based on role.
-        if (userData && userData.data && userData.data.role === "driver") {
+
+        if (
+          userData &&
+          userData.data &&
+          userData.data.role === "driver" &&
+          Number(userData.data.last_login_at) === 1
+        ) {
           isDriver = true;
           socket.data.isDriver = true;
-          console.log("[socket] ✓ Driver connected - auto-fetching nearby rides for user_id=%s", userId);
-          
+          console.log("[socket] ✓ Driver mode detected - auto-fetching nearby rides for user_id=%s", userId);
           await refreshNearbyRides();
         }
       } catch (error) {
@@ -1370,34 +1512,8 @@
         
         // Auto-refresh all online drivers if refresh_drivers flag is set
         if (refresh_drivers) {
-          console.log("[socket] 🔄 Auto-refreshing all online drivers' nearby rides list");
-          let driverRefreshCount = 0;
-          
-          // Iterate through all connected sockets
-          const sockets = await io.fetchSockets();
-          for (const sock of sockets) {
-            if (sock.data.isDriver && sock.data.refreshNearbyRides) {
-              const visibilityReset = getVisibilityResetPayload(data);
-              const forcedRides = getForcedRidesFromBroadcast(data);
-              const fareUpdated = !!(data && (data.fare_updated || data.reason === "fare_updated" || forcedRides.length > 0));
-
-              if (visibilityReset) {
-                if (typeof sock.data.resetRideVisibilityForDriver === "function") {
-                  sock.data.resetRideVisibilityForDriver(visibilityReset, event);
-                } else {
-                  sock.emit("driver:ride-visibility-reset", visibilityReset);
-                }
-              }
-
-              await sock.data.refreshNearbyRides({
-                forceRides: forcedRides,
-                fareUpdated,
-                source: fareUpdated ? "fare_updated" : event,
-              });
-              driverRefreshCount++;
-            }
-          }
-          
+          console.log("[socket] 🔄 Auto-refreshing online drivers' nearby rides list");
+          const driverRefreshCount = await refreshConnectedDriverSockets(data, event);
           console.log("[socket] ✓ Refreshed nearby rides for %d online drivers", driverRefreshCount);
         }
         
@@ -1417,33 +1533,8 @@
         
         // Auto-refresh all drivers if refresh_drivers flag is set
         if (refresh_drivers) {
-          console.log("[socket] 🔄 Auto-refreshing all online drivers' nearby rides list");
-          let driverRefreshCount = 0;
-          
-          const sockets = await io.fetchSockets();
-          for (const sock of sockets) {
-            if (sock.data.isDriver && sock.data.refreshNearbyRides) {
-              const visibilityReset = getVisibilityResetPayload(data);
-              const forcedRides = getForcedRidesFromBroadcast(data);
-              const fareUpdated = !!(data && (data.fare_updated || data.reason === "fare_updated" || forcedRides.length > 0));
-
-              if (visibilityReset) {
-                if (typeof sock.data.resetRideVisibilityForDriver === "function") {
-                  sock.data.resetRideVisibilityForDriver(visibilityReset, event);
-                } else {
-                  sock.emit("driver:ride-visibility-reset", visibilityReset);
-                }
-              }
-
-              await sock.data.refreshNearbyRides({
-                forceRides: forcedRides,
-                fareUpdated,
-                source: fareUpdated ? "fare_updated" : event,
-              });
-              driverRefreshCount++;
-            }
-          }
-          
+          console.log("[socket] 🔄 Auto-refreshing online drivers' nearby rides list");
+          const driverRefreshCount = await refreshConnectedDriverSockets(data, event);
           console.log("[socket] ✓ Refreshed nearby rides for %d online drivers", driverRefreshCount);
         }
         

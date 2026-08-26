@@ -111,12 +111,23 @@ if (!function_exists('get_online_driver_ids_for_socket')) {
     }
 }
 
-if (!function_exists('nearby_active_driver_query')) {
-    function nearby_active_driver_query()
+if (!function_exists('active_driver_mode_query')) {
+    /**
+     * Drivers currently in driver mode (logged in as driver).
+     * Does not require device token — used for socket/list visibility.
+     */
+    function active_driver_mode_query()
     {
         return User::query()
             ->where('role', 'driver')
-            ->where('last_login_at', 1)
+            ->where('last_login_at', 1);
+    }
+}
+
+if (!function_exists('nearby_active_driver_query')) {
+    function nearby_active_driver_query()
+    {
+        return active_driver_mode_query()
             ->whereNotNull('device_token')
             ->where('device_token', '!=', 'default_token');
     }

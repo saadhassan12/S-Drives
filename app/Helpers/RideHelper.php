@@ -108,7 +108,7 @@ if (!function_exists('find_drivers_for_fare_update')) {
             return $nearbyDrivers;
         }
 
-        $extraDrivers = nearby_active_driver_query()
+        $extraDrivers = active_driver_mode_query()
             ->select('id', 'latitude', 'longitude', 'device_token', 'role', 'last_login_at', 'is_online', 'is_app_foreground')
             ->whereIn('id', $missingIds)
             ->whereNotNull('latitude')
@@ -187,6 +187,10 @@ if (!function_exists('notify_drivers_fare_updated')) {
             ], $socketDriverIds, false);
         }
 
+        $rideDetails = Ride::with(['user', 'vehicleCategory'])
+            ->find($ride->id)
+            ?->toArray();
+
         refresh_all_drivers_list('fare_updated', [
             'ride_id' => $ride->id,
             'visibility_seconds' => $seconds,
@@ -194,9 +198,8 @@ if (!function_exists('notify_drivers_fare_updated')) {
             'final_fare' => $ride->final_fare,
             'estimated_fare' => $ride->estimated_fare,
             'fare_updated' => true,
-            'ride_details' => Ride::with(['user', 'vehicleCategory'])
-                ->find($ride->id)
-                ?->toArray(),
+            'eligible_driver_ids' => $allDriverIds,
+            'ride_details' => $rideDetails,
         ]);
     }
 }
@@ -216,7 +219,7 @@ if (!function_exists('find_nearby_drivers_for_ride')) {
         $radiusKm = $radiusKm ?? driver_ride_radius_km();
         [$minLat, $maxLat, $minLng, $maxLng] = get_geo_bounds($rideLat, $rideLng, $radiusKm);
 
-        return nearby_active_driver_query()
+        return active_driver_mode_query()
             ->select('id', 'latitude', 'longitude', 'device_token', 'role', 'last_login_at', 'is_online', 'is_app_foreground')
             ->whereNotNull('latitude')
             ->whereNotNull('longitude')
