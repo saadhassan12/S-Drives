@@ -107,6 +107,7 @@
     const forcedRides = getForcedRidesFromBroadcast(data);
 
     if (eligibleIds.length === 0 || forcedRides.length === 0) {
+      console.log("[socket] ⚠ fare update missing eligible=%d forced=%d", eligibleIds.length, forcedRides.length);
       return 0;
     }
 
@@ -115,17 +116,29 @@
     let deliveredCount = 0;
 
     for (const driverId of eligibleIds) {
-      const onlineCount = getUserOnlineCount(driverId);
-      if (onlineCount <= 0) {
-        console.log("[socket] ⚠ fare update skip offline driver user_id=%s", driverId);
-        continue;
-      }
+      const payloadRides = forcedRides.map((ride) => ({
+        ...ride,
+        id: ride.id ?? ride.ride_id,
+        final_fare: ride.final_fare ?? ride.estimated_fare,
+        estimated_fare: ride.estimated_fare ?? ride.final_fare,
+        fare_updated: true,
+      }));
 
       if (visibilityReset) {
         io.to(`user:${driverId}`).emit("driver:ride-visibility-reset", visibilityReset);
       }
 
-      let refreshedViaSocket = false;
+      // Always push list directly so every online driver socket receives the updated ride.
+      io.to(`user:${driverId}`).emit("driver:nearby-rides:list", {
+        success: true,
+        data: payloadRides,
+        count: payloadRides.length,
+        timestamp: new Date().toISOString(),
+        fare_updated: true,
+        hidden: false,
+        reason: "fare_updated",
+      });
+
       for (const sock of sockets) {
         const meta = socketMeta.get(sock.id);
         if (!meta || Number(meta.userId) !== Number(driverId)) {
@@ -138,32 +151,19 @@
 
         if (typeof sock.data.refreshNearbyRides === "function") {
           await sock.data.refreshNearbyRides({
-            forceRides: forcedRides,
+            forceRides: payloadRides,
             fareUpdated: true,
             source: "fare_updated_direct",
           });
-          refreshedViaSocket = true;
         }
-      }
-
-      if (!refreshedViaSocket) {
-        io.to(`user:${driverId}`).emit("driver:nearby-rides:list", {
-          success: true,
-          data: forcedRides,
-          count: forcedRides.length,
-          timestamp: new Date().toISOString(),
-          fare_updated: true,
-          hidden: false,
-          reason: "fare_updated",
-        });
       }
 
       deliveredCount++;
       console.log(
-        "[socket] ✓ fare update delivered to driver user_id=%s rides=%d refreshed=%s",
+        "[socket] ✓ fare update pushed to driver user_id=%s rides=%d online=%d",
         driverId,
-        forcedRides.length,
-        refreshedViaSocket ? "yes" : "emit-only"
+        payloadRides.length,
+        getUserOnlineCount(driverId)
       );
     }
 

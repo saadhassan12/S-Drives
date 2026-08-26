@@ -452,8 +452,46 @@ public function near_ride()
         })
         ->values();
 
+    $pendingFareRides = collect(get_pending_fare_rides_for_driver((int) $user->id))
+        ->map(function ($ride) use ($driverLatitude, $driverLongitude, $radiusKm, $user) {
+            if (is_array($ride)) {
+                $ride = (object) $ride;
+            }
+
+            $rideLat = (float) ($ride->start_latitude ?? 0);
+            $rideLng = (float) ($ride->start_longitude ?? 0);
+            $distanceKm = calculate_geo_distance_km(
+                (float) $driverLatitude,
+                (float) $driverLongitude,
+                $rideLat,
+                $rideLng
+            );
+
+            if ($distanceKm > $radiusKm) {
+                return null;
+            }
+
+            $ride->driver_distance_km = round($distanceKm, 2);
+            $ride->max_radius_km = $radiusKm;
+            $ride->fare_updated = true;
+
+            return $ride;
+        })
+        ->filter()
+        ->values();
+
+    $existingIds = $ridesToUpdate->pluck('id')->map(fn ($id) => (int) $id)->all();
+
+    foreach ($pendingFareRides as $pendingRide) {
+        $pendingId = (int) ($pendingRide->id ?? 0);
+        if ($pendingId > 0 && !in_array($pendingId, $existingIds, true)) {
+            $ridesToUpdate->push($pendingRide);
+            $existingIds[] = $pendingId;
+        }
+    }
+
     if ($ridesToUpdate->isNotEmpty()) {
-        return apiResponse($ridesToUpdate, 'Nearby rides fetched successfully.', 200);
+        return apiResponse($ridesToUpdate->values(), 'Nearby rides fetched successfully.', 200);
     }
 
     return apiResponse([], 'Ride not found', 200, false);

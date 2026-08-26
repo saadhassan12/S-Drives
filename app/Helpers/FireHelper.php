@@ -173,6 +173,24 @@ if (!function_exists('send_user_push_notification')) {
     }
 }
 
+if (!function_exists('send_driver_fare_update_notification')) {
+    /**
+     * Fare updates must reach drivers even when the app is open in foreground.
+     */
+    function send_driver_fare_update_notification($driver, $title, $body)
+    {
+        if (!$driver || $driver->role !== 'driver' || (int) $driver->last_login_at !== 1) {
+            return false;
+        }
+
+        if (!is_valid_device_token($driver->device_token)) {
+            return false;
+        }
+
+        return send_firebase_notification($title, $body, $driver->device_token, $driver);
+    }
+}
+
 if (!function_exists('send_driver_ride_notification')) {
     function send_driver_ride_notification($driver, $title, $body)
     {

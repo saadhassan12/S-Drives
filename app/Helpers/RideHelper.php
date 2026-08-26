@@ -80,6 +80,55 @@ if (!function_exists('get_ride_previously_notified_driver_ids')) {
     }
 }
 
+if (!function_exists('cache_pending_fare_ride_for_driver')) {
+    function cache_pending_fare_ride_for_driver(int $driverId, int $rideId, array $rideDetails, int $seconds = 180): void
+    {
+        Cache::put("driver_{$driverId}_pending_fare_ride", [
+            'ride_id' => $rideId,
+            'ride_details' => $rideDetails,
+            'final_fare' => $rideDetails['final_fare'] ?? $rideDetails['estimated_fare'] ?? null,
+            'estimated_fare' => $rideDetails['estimated_fare'] ?? null,
+            'fare_updated' => true,
+        ], now()->addSeconds(max($seconds, 180)));
+    }
+}
+
+if (!function_exists('get_pending_fare_rides_for_driver')) {
+    function get_pending_fare_rides_for_driver(int $driverId): array
+    {
+        $pending = Cache::get("driver_{$driverId}_pending_fare_ride");
+
+        if (!is_array($pending) || empty($pending['ride_details'])) {
+            return [];
+        }
+
+        $ride = $pending['ride_details'];
+        $ride['fare_updated'] = true;
+        $ride['final_fare'] = $pending['final_fare'] ?? $ride['final_fare'] ?? $ride['estimated_fare'] ?? null;
+        $ride['estimated_fare'] = $pending['estimated_fare'] ?? $ride['estimated_fare'] ?? $ride['final_fare'] ?? null;
+
+        return [$ride];
+    }
+}
+
+if (!function_exists('clear_pending_fare_ride_for_driver')) {
+    function clear_pending_fare_ride_for_driver(int $driverId, ?int $rideId = null): void
+    {
+        $key = "driver_{$driverId}_pending_fare_ride";
+        $pending = Cache::get($key);
+
+        if (!is_array($pending)) {
+            return;
+        }
+
+        if ($rideId !== null && (int) ($pending['ride_id'] ?? 0) !== $rideId) {
+            return;
+        }
+
+        Cache::forget($key);
+    }
+}
+
 if (!function_exists('find_drivers_for_fare_update')) {
     /**
      * Nearby drivers plus any previously notified driver who is still eligible.
@@ -155,12 +204,28 @@ if (!function_exists('notify_drivers_fare_updated')) {
             mark_ride_visible_for_drivers($allDriverIds, (int) $ride->id, $seconds);
         }
 
+        $rideDetails = Ride::with(['user', 'vehicleCategory'])
+            ->find($ride->id)
+            ?->toArray();
+
+        if (is_array($rideDetails)) {
+            $rideDetails['final_fare'] = $ride->final_fare;
+            $rideDetails['estimated_fare'] = $ride->estimated_fare;
+            $rideDetails['fare_updated'] = true;
+        }
+
         foreach ($drivers as $driver) {
-            send_driver_ride_notification(
+            send_driver_fare_update_notification(
                 $driver,
                 'Fare Updated',
                 'Ride fare has been updated to ' . $fareAmount
             );
+        }
+
+        if (is_array($rideDetails)) {
+            foreach ($allDriverIds as $driverId) {
+                cache_pending_fare_ride_for_driver((int) $driverId, (int) $ride->id, $rideDetails, $seconds);
+            }
         }
 
         $ridePayload = [
@@ -186,10 +251,6 @@ if (!function_exists('notify_drivers_fare_updated')) {
                 'reason' => 'fare_updated',
             ], $socketDriverIds, false);
         }
-
-        $rideDetails = Ride::with(['user', 'vehicleCategory'])
-            ->find($ride->id)
-            ?->toArray();
 
         refresh_all_drivers_list('fare_updated', [
             'ride_id' => $ride->id,
