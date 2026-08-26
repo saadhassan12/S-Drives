@@ -16,11 +16,16 @@ class ClearCache
      */
     public function handle(Request $request, Closure $next): Response
     {
-        // ✅ Cache clear commands
-        Artisan::call('cache:clear');
-        Artisan::call('config:clear');
-        Artisan::call('route:clear');
-        Artisan::call('view:clear');
+        // Do not wipe ride visibility cache on read-only driver polling.
+        if (!$request->isMethod('GET')) {
+            Artisan::call('cache:clear');
+        }
+
+        if (!$request->is('api/driver/near/by/ride')) {
+            Artisan::call('config:clear');
+            Artisan::call('route:clear');
+            Artisan::call('view:clear');
+        }
 
         return $next($request);
     }

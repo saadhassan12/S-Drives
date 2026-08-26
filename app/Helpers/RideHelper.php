@@ -194,6 +194,9 @@ if (!function_exists('notify_drivers_fare_updated')) {
             'final_fare' => $ride->final_fare,
             'estimated_fare' => $ride->estimated_fare,
             'fare_updated' => true,
+            'ride_details' => Ride::with(['user', 'vehicleCategory'])
+                ->find($ride->id)
+                ?->toArray(),
         ]);
     }
 }

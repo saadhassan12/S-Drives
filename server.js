@@ -33,6 +33,61 @@
     Number(process.env.RIDE_VISIBILITY_SECONDS || 60) * 1000
   );
 
+  function getForcedRidesFromBroadcast(data) {
+    if (!data) return [];
+
+    if (Array.isArray(data.forced_rides) && data.forced_rides.length > 0) {
+      return data.forced_rides;
+    }
+
+    if (data.ride_details) {
+      return [data.ride_details];
+    }
+
+    if (data.ride && data.ride.ride_details) {
+      return [data.ride.ride_details];
+    }
+
+    if (data.fare_updated && data.ride && typeof data.ride === "object") {
+      return [data.ride];
+    }
+
+    return [];
+  }
+
+  function mergeForcedRides(rides, forcedRides) {
+    if (!Array.isArray(forcedRides) || forcedRides.length === 0) {
+      return Array.isArray(rides) ? rides : [];
+    }
+
+    const list = Array.isArray(rides) ? [...rides] : [];
+
+    forcedRides.forEach((forced) => {
+      const forcedId = forced.id ?? forced.ride_id;
+      if (forcedId == null) return;
+
+      const idx = list.findIndex((ride) => {
+        const rideId = ride.id ?? ride.ride_id;
+        return String(rideId) === String(forcedId);
+      });
+
+      const merged = {
+        ...(idx >= 0 ? list[idx] : {}),
+        ...forced,
+        id: forced.id ?? forced.ride_id ?? forcedId,
+        fare_updated: true,
+      };
+
+      if (idx >= 0) {
+        list[idx] = merged;
+      } else {
+        list.unshift(merged);
+      }
+    });
+
+    return list;
+  }
+
   function getVisibilityResetPayload(data) {
     if (!data) return null;
 
@@ -363,7 +418,7 @@
     socket.data.resetRideVisibilityForDriver = resetRideVisibilityForDriver;
 
     // Helper function to refresh nearby rides for this driver
-    const refreshNearbyRides = async () => {
+    const refreshNearbyRides = async (options = {}) => {
       if (!socket.data.isDriver) return;
       
       try {
@@ -373,18 +428,44 @@
             Authorization: `Bearer ${token}`,
           },
         });
+
+        const forcedRides = options.forceRides || [];
+        const mergedRides = mergeForcedRides(nearbyRides?.data || [], forcedRides);
+        const fareUpdated = options.fareUpdated === true || forcedRides.length > 0;
         
-        console.log("[socket] 🔄 Refreshing nearby rides for driver user_id=%s, count=%d", 
-          userId, nearbyRides?.data?.length || 0);
+        console.log(
+          "[socket] 🔄 Refreshing nearby rides for driver user_id=%s, api_count=%d, merged_count=%d, source=%s",
+          userId,
+          nearbyRides?.data?.length || 0,
+          mergedRides.length,
+          options.source || "refresh"
+        );
         
         emitNearbyRidesWithAutoHide({
           success: true,
-          data: nearbyRides?.data || [],
-          count: nearbyRides?.data?.length || 0,
+          data: mergedRides,
+          count: mergedRides.length,
           timestamp: new Date().toISOString(),
-        }, "refresh");
+          fare_updated: fareUpdated,
+          hidden: mergedRides.length > 0 ? false : undefined,
+          reason: mergedRides.length > 0 ? (fareUpdated ? "fare_updated" : "visible") : undefined,
+        }, options.source || "refresh");
       } catch (error) {
         console.error("[socket] ✗ Refresh nearby rides error:", error.message);
+
+        const forcedRides = options.forceRides || [];
+        if (forcedRides.length > 0) {
+          const mergedRides = mergeForcedRides([], forcedRides);
+          emitNearbyRidesWithAutoHide({
+            success: true,
+            data: mergedRides,
+            count: mergedRides.length,
+            timestamp: new Date().toISOString(),
+            fare_updated: true,
+            hidden: false,
+            reason: "fare_updated",
+          }, options.source || "refresh-forced");
+        }
       }
     };
     
@@ -896,8 +977,8 @@
           bodyData.promo_code = payload.promo_code;
         }
         
-        const raw = await laravelFetch(`/api/booking/${encodeURIComponent(rideId)}`, {
-          method: "PUT",
+        const raw = await laravelFetch(`/api/rides/vehicle/update/${encodeURIComponent(rideId)}`, {
+          method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
             "Content-Type": "application/json",
@@ -1297,6 +1378,9 @@
           for (const sock of sockets) {
             if (sock.data.isDriver && sock.data.refreshNearbyRides) {
               const visibilityReset = getVisibilityResetPayload(data);
+              const forcedRides = getForcedRidesFromBroadcast(data);
+              const fareUpdated = !!(data && (data.fare_updated || data.reason === "fare_updated" || forcedRides.length > 0));
+
               if (visibilityReset) {
                 if (typeof sock.data.resetRideVisibilityForDriver === "function") {
                   sock.data.resetRideVisibilityForDriver(visibilityReset, event);
@@ -1304,7 +1388,12 @@
                   sock.emit("driver:ride-visibility-reset", visibilityReset);
                 }
               }
-              await sock.data.refreshNearbyRides();
+
+              await sock.data.refreshNearbyRides({
+                forceRides: forcedRides,
+                fareUpdated,
+                source: fareUpdated ? "fare_updated" : event,
+              });
               driverRefreshCount++;
             }
           }
@@ -1335,6 +1424,9 @@
           for (const sock of sockets) {
             if (sock.data.isDriver && sock.data.refreshNearbyRides) {
               const visibilityReset = getVisibilityResetPayload(data);
+              const forcedRides = getForcedRidesFromBroadcast(data);
+              const fareUpdated = !!(data && (data.fare_updated || data.reason === "fare_updated" || forcedRides.length > 0));
+
               if (visibilityReset) {
                 if (typeof sock.data.resetRideVisibilityForDriver === "function") {
                   sock.data.resetRideVisibilityForDriver(visibilityReset, event);
@@ -1342,7 +1434,12 @@
                   sock.emit("driver:ride-visibility-reset", visibilityReset);
                 }
               }
-              await sock.data.refreshNearbyRides();
+
+              await sock.data.refreshNearbyRides({
+                forceRides: forcedRides,
+                fareUpdated,
+                source: fareUpdated ? "fare_updated" : event,
+              });
               driverRefreshCount++;
             }
           }
