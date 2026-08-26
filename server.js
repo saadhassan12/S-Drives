@@ -942,7 +942,7 @@
       try {
         console.log("[socket] ride:update-bid-amount - updating ride_id=%s with final_fare=%s", rideId, finalFare);
         
-        const raw = await laravelFetch(`/api/ride/${encodeURIComponent(rideId)}/update-bid-amount`, {
+        const raw = await laravelFetch(`/api/rides/${encodeURIComponent(rideId)}/update-amount`, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${token}`,
@@ -1249,7 +1249,7 @@
                 sock.emit("driver:ride-visibility-reset", {
                   ride_id: data.ride_id,
                   visibility_seconds: data.visibility_seconds || 60,
-                  reason: "bid_placed",
+                  reason: data.reason || "bid_placed",
                 });
               }
               await sock.data.refreshNearbyRides();
@@ -1286,7 +1286,7 @@
                 sock.emit("driver:ride-visibility-reset", {
                   ride_id: data.ride_id,
                   visibility_seconds: data.visibility_seconds || 60,
-                  reason: "bid_placed",
+                  reason: data.reason || "bid_placed",
                 });
               }
               await sock.data.refreshNearbyRides();

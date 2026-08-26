@@ -102,7 +102,7 @@ if (!function_exists('is_ride_visible_for_driver')) {
  * @return bool Success status
  */
 if (!function_exists('notify_drivers_new_ride')) {
-    function notify_drivers_new_ride(array $driverIds, array $rideData): bool
+    function notify_drivers_new_ride(array $driverIds, array $rideData, bool $resetVisibility = false): bool
     {
         $driverIds = filter_active_driver_ids($driverIds);
 
@@ -112,13 +112,23 @@ if (!function_exists('notify_drivers_new_ride')) {
 
         if (!empty($rideData['ride_id'])) {
             mark_ride_visible_for_drivers($driverIds, (int) $rideData['ride_id'], ride_visibility_seconds());
+            remember_ride_notified_drivers((int) $rideData['ride_id'], $driverIds);
+        }
+
+        $eventData = [
+            'ride' => $rideData,
+            'message' => 'New ride available nearby',
+        ];
+
+        if ($resetVisibility && !empty($rideData['ride_id'])) {
+            $eventData['ride_id'] = (int) $rideData['ride_id'];
+            $eventData['visibility_seconds'] = ride_visibility_seconds();
+            $eventData['visibility_reset'] = true;
+            $eventData['reason'] = !empty($rideData['fare_updated']) ? 'fare_updated' : 'ride_updated';
         }
 
         // Broadcast event AND auto-refresh all online drivers' nearby rides list
-        return broadcast_socket_event('driver:new-ride-available', [
-            'ride' => $rideData,
-            'message' => 'New ride available nearby',
-        ], $driverIds, true); // true = refresh_drivers
+        return broadcast_socket_event('driver:new-ride-available', $eventData, $driverIds, true);
     }
 }
 

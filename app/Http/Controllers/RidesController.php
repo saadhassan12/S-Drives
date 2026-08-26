@@ -362,16 +362,12 @@ public function updateBidAmount(Request $request, $ride_id)
 if ($ride) {
     
     $ride->final_fare = $amountChanges;
+    $ride->touch();
     $ride->save();
     $firebaseResponse = null;
 
     $radiusKm = driver_ride_radius_km();
-    $drivers = find_nearby_drivers_for_ride(
-        (float) $ride->start_latitude,
-        (float) $ride->start_longitude,
-        [(int) $ride->vehicle_category_id],
-        $radiusKm
-    );
+    $drivers = find_drivers_for_fare_update($ride, $radiusKm);
 
       foreach ($drivers as $driver) {
         send_driver_ride_notification(
@@ -387,11 +383,12 @@ if ($ride) {
         notify_drivers_new_ride($driverIds, [
             'ride_id' => $ride->id,
             'final_fare' => $ride->final_fare,
+            'estimated_fare' => $ride->estimated_fare,
             'fare_updated' => true,
             'start' => $ride->start,
             'destination' => $ride->destination,
             'max_radius_km' => $radiusKm,
-        ]);
+        ], true);
     }
 }
 

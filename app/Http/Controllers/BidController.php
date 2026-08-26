@@ -35,6 +35,7 @@ class BidController extends Controller
             ]);
 
             $existingBid->refresh();
+            remember_ride_notified_drivers((int) $rideId, [(int) auth()->id()]);
 
             if ($passenger && $passenger->device_token) {
                 send_user_push_notification(
@@ -66,6 +67,8 @@ class BidController extends Controller
             'status' => 'pending',
             'created_at' => now(),
         ]);
+
+        remember_ride_notified_drivers((int) $rideId, [(int) auth()->id()]);
 
         if ($passenger && $passenger->device_token) {
             send_user_push_notification(
